@@ -1,0 +1,1286 @@
+================================================================================
+DOCUMENT_TYPE: TECHNICAL_SPECIFICATION
+DOCUMENT_ID: ECHATZ_SPEC_V4
+INTENDED_CONSUMER: AI_AGENT
+ENCODING: UTF-8
+SCHEMA_VERSION: 4.0
+CHANGELOG:
+  V2 — Solution A: recipient registration gate + InviteRegistry
+  V3 — All systemic issues addressed (FIX_1 through FIX_8)
+  V4 — Two encryption model gaps addressed:
+    FIX_9:  Public key sourcing documented — extracted from registerUser() tx signature,
+            stored in IdentityRegistry, fetched before encryption
+    FIX_10: Dual ciphertext per message — one encrypted for recipient, one for sender,
+            both stored on-chain so sender can read their own sent message history
+================================================================================
+
+PROJECT_NAME: eChatz
+CLASSIFICATION: On-chain encrypted peer-to-peer messaging and payment protocol
+PRIMARY_TECHNOLOGY: Zama fhEVM (Fully Homomorphic Encryption EVM)
+PROGRAM_CONTEXT: Zama Developer Program submission
+DEPLOYMENT_TARGET: fhEVM-compatible EVM chain (testnet: Zama devnet / Sepolia fhEVM)
+
+================================================================================
+SECTION_1: SYSTEM_ARCHITECTURE
+================================================================================
+
+1.1 COMPONENT_GRAPH
+--------------------------------------------------------------------------------
+
+COMPONENTS:
+  - ID: CLIENT_A
+    TYPE: browser_runtime
+    RUNTIME: Next.js 14 (React 18)
+    DEPENDENCIES: [fhevmjs, wagmi, ethers.js, rainbowkit]
+    RESPONSIBILITIES:
+      - Encrypt outbound message payload using recipient public key via fhevmjs
+      - Submit encrypted payload to MessageStore.sol via ethers.js
+      - Request re-encryption of inbound ciphertext from fhEVM node
+      - Decrypt re-encrypted payload client-side using local wallet private key
+      - Parse slash commands from input string and route to correct contract
+
+  - ID: CLIENT_B
+    TYPE: browser_runtime
+    SAME_SPEC_AS: CLIENT_A
+    ROLE: recipient_side
+
+  - ID: FHEVM_NODE
+    TYPE: blockchain_node
+    PROTOCOL: fhEVM (Zama TFHE-rs backend)
+    RESPONSIBILITIES:
+      - Execute TFHE operations on ciphertext (no plaintext exposure)
+      - Handle re-encryption requests: re-encrypt ciphertext under recipient key
+      - Provide public key for client-side encryption bootstrap
+    NOTE: Node never has access to plaintext. All compute is on ciphertext.
+
+  - ID: SMART_CONTRACT_LAYER
+    TYPE: evm_contracts
+    LANGUAGE: Solidity ^0.8.19
+    LIBRARY: TFHE.sol (Zama fhEVM library)
+    CONTRACTS:
+      - MessageStore.sol
+      - PaymentRouter.sol
+      - IdentityRegistry.sol
+      - InviteRegistry.sol
+      - VotingModule.sol
+      - ScheduleModule.sol
+
+  - ID: INDEXER
+    TYPE: subgraph
+    PROTOCOL: The Graph
+    INDEXES: [MessageSent, PaymentSent, RequestCreated, PollCreated, UserRegistered]
+    NOTE: Indexes ciphertext and metadata only. Never indexes plaintext.
+
+  - ID: STORAGE_LAYER
+    TYPE: decentralized_file_storage
+    PROTOCOL: IPFS
+    USE_CASE: Store encrypted message blobs > 512 bytes
+    ON_CHAIN_REFERENCE: keccak256(CID) stored in MessageStore.sol as ebytes32
+
+  - ID: NOTIFICATION_LAYER
+    TYPE: web3_push_protocol
+    PROTOCOL: Push Protocol (formerly EPNS)
+    TRIGGER: Contract event emission → Push channel → client wallet subscription
+
+  - ID: SCHEDULER
+    TYPE: automation_service
+    PROTOCOL: Gelato Network OR Chainlink Automation
+    USE_CASE: Trigger time-based payment execution for /schedule command
+
+1.2 DATA_FLOW: MESSAGE_SEND
+--------------------------------------------------------------------------------
+
+STEP_0 [FIX_1 + FIX_4 — SENDER & RECIPIENT REGISTRATION GATE + ENS RESOLUTION]:
+  ACTOR: CLIENT_A (frontend)
+  ACTION: pre-flight checks before any encryption or tx
+
+  SUBSTEP_0A — SENDER REGISTRATION CHECK [FIX_1]:
+    senderRegistered = await IdentityRegistry.isRegistered(msg.sender)
+    IF senderRegistered == false:
+      ABORT all messaging + payment flows entirely
+      DISPLAY: registration onboarding screen
+      TRIGGER: registerUser() flow
+      NOTE: This check runs ONCE at app boot when wallet connects, not per-message.
+            Result is cached in app state and invalidated only on wallet change.
+            An unregistered sender has no fhEVM key context — they cannot encrypt
+            or decrypt anything. No other flow should proceed until this resolves.
+      RETURN: { status: SENDER_UNREGISTERED }
+
+  SUBSTEP_0B — RECIPIENT REGISTRATION CHECK + PUBLIC KEY FETCH [SOLUTION_A + FIX_9]:
+    recipientRegistered = await IdentityRegistry.isRegistered(recipientAddress)
+    IF recipientRegistered == false:
+      ABORT message send flow
+      TRIGGER: invite flow (see Section 2.5 — InviteRegistry.sol)
+      DISPLAY: UI modal "This address hasn't joined eChatz yet. Send them an invite?"
+      RETURN: { status: RECIPIENT_UNREGISTERED, inviteAvailable: true }
+    IF recipientRegistered == true:
+      recipientPublicKey = await IdentityRegistry.getPublicKey(recipientAddress)
+      NOTE: [FIX_9] Public key is guaranteed to exist if isRegistered == true,
+            because registerUser() requires signing a tx which exposes the public key.
+            The key is extracted from that tx signature and stored at registration time.
+            See IdentityRegistry.registerUser() for extraction spec.
+      CONTINUE to SUBSTEP_0C
+
+  SUBSTEP_0C — ENS RESOLUTION AT SEND TIME [FIX_4]:
+    NOTE: ENS names are transferable. A name resolved earlier may now point to
+          a different address. Resolution must happen at the moment of send,
+          not at search/display time.
+    IF recipientInput is ENS name (ends with .eth or other TLD):
+      resolvedAddress = await provider.resolveName(recipientInput)
+      IF resolvedAddress == null:
+        ABORT: display "ENS name could not be resolved"
+        RETURN: { status: ENS_RESOLUTION_FAILED }
+      STORE: resolvedAddress as the canonical recipient for this send operation
+      DISPLAY: show resolved address to sender for confirmation before sending
+        UI: "Sending to: alice.eth → 0xABCD...1234. Confirm?"
+      NOTE: The raw resolvedAddress — NOT the ENS name — is what gets passed to
+            sendMessage() and stored in the thread record. ENS name is display-only.
+    CONTINUE to STEP_1
+
+STEP_1 [FIX_10 — DUAL CIPHERTEXT ENCRYPTION]:
+  ACTOR: CLIENT_A
+  PROBLEM: If message is encrypted only under recipient's public key, the sender
+           cannot decrypt their own sent messages when scrolling back through history.
+           The sender's own words appear as unreadable locked ciphertext in their UI.
+  SOLUTION: Encrypt every message TWICE — once for recipient, once for sender.
+            Both ciphertexts are stored on-chain in the same EncryptedMessage struct.
+            This is the same approach Signal and WhatsApp use, made explicit here.
+  ACTION:
+    senderPublicKey    = await IdentityRegistry.getPublicKey(msg.sender)
+    recipientPublicKey = fetched in SUBSTEP_0B
+    recipientCiphertext = fhevmjs.encrypt(message_bytes, recipientPublicKey)
+    senderCiphertext    = fhevmjs.encrypt(message_bytes, senderPublicKey)
+  OUTPUT:
+    recipientCiphertext  (type: ebytes) — only recipient can decrypt
+    senderCiphertext     (type: ebytes) — only sender can decrypt
+  NOTE: Plaintext message_bytes never leave the browser.
+        Both encrypt() calls happen client-side before any network call.
+        Gas cost for content storage approximately doubles — this is unavoidable.
+        The alternative (sender cannot read their own history) is unacceptable UX.
+
+STEP_2:
+  ACTOR: CLIENT_A
+  ACTION: submit transaction with both ciphertexts
+  CONTRACT: MessageStore.sol
+  FUNCTION: sendMessage(address recipient, ebytes recipientCiphertext, ebytes senderCiphertext, uint8 storageType, uint8 messageType)
+  STORAGE_ROUTING [FIX_3 hybrid logic applies per ciphertext]:
+    IF payload_size <= 512 bytes (per ciphertext):
+      store both ciphertexts on-chain directly
+      storageType = 0
+    ELSE:
+      SUBSTEP_A: upload BOTH ciphertexts to IPFS (as separate blobs, same dual-pin policy)
+      SUBSTEP_B: store keccak256(CID_recipient) and keccak256(CID_sender) on-chain
+      storageType = 1
+    NOTE: Both ciphertexts go through the same FIX_3 dual-pin IPFS strategy.
+
+STEP_3:
+  ACTOR: FHEVM_NODE
+  ACTION: execute sendMessage(), store ebytes in contract storage
+  STORAGE_KEY: mapping(bytes32 threadId => EncryptedMessage[]) threads
+  THREAD_ID_DERIVATION: keccak256(abi.encodePacked(addressA, addressB))
+    WHERE: addressA = min(sender, recipient), addressB = max(sender, recipient)
+    REASON: deterministic, order-independent thread ID
+
+STEP_4:
+  ACTOR: INDEXER (The Graph)
+  ACTION: index MessageSent event
+  EVENT_SCHEMA:
+    event MessageSent(
+      bytes32 indexed threadId,
+      address indexed sender,
+      address indexed recipient,
+      uint256 timestamp,
+      bytes32 messageId
+    )
+  NOTE: ciphertext NOT emitted in event. Only metadata indexed.
+
+STEP_4B [FIX_7 — REORG DETECTION + MESSAGE FINALITY]:
+  ACTOR: CLIENT_A (frontend)
+  PROBLEM: Chain reorganisations can orphan a block containing sendMessage() tx.
+           Optimistic UI shows message as delivered but it was never stored on-chain.
+  MESSAGE_STATE_MACHINE:
+    OPTIMISTIC → tx submitted, rendered in UI immediately with pending indicator
+    PENDING    → txHash received, awaiting block confirmations
+    CONFIRMED  → N confirmations reached — treat as final
+    FAILED     → tx missing after timeout OR reorg detected — show resend prompt
+  CONFIRMATION_THRESHOLD:
+    fast L2 / fhEVM devnet: N = 3 blocks
+    Ethereum mainnet:       N = 12 blocks
+  REORG_DETECTION_LOGIC:
+    1. On tx submit: store { txHash, blockNumber, messageId } in local state
+    2. Poll provider.getTransaction(txHash) every 2 seconds
+    3. IF tx.blockNumber != stored blockNumber: REORG — mark FAILED
+    4. IF tx not found after 3 minutes: TIMEOUT — mark FAILED
+    5. IF N confirmations: mark CONFIRMED
+    ON_FAILED: display "Message may not have been delivered. [Resend]"
+               [Resend] resubmits same encrypted payload — does NOT re-encrypt
+  RULE: Never display delivered status before CONFIRMED. OPTIMISTIC ≠ delivered.
+
+STEP_5 — RECIPIENT READS MESSAGE:
+  ACTOR: CLIENT_B
+  ACTION: detect new message via subgraph query or websocket event
+  THEN: call fhevmjs.reencrypt(message.recipientCiphertext, CLIENT_B_private_key)
+  FHEVM_OPERATION: node re-encrypts recipientCiphertext under CLIENT_B public key
+  OUTPUT: re_encrypted_blob
+  THEN: CLIENT_B decrypts re_encrypted_blob locally → plaintext
+
+STEP_5B — SENDER READS THEIR OWN SENT MESSAGE [FIX_10]:
+  ACTOR: CLIENT_A (scrolling back through sent history)
+  ACTION: detect own message in thread (message.sender == CLIENT_A address)
+  THEN: call fhevmjs.reencrypt(message.senderCiphertext, CLIENT_A_private_key)
+  FHEVM_OPERATION: node re-encrypts senderCiphertext under CLIENT_A public key
+  OUTPUT: re_encrypted_blob
+  THEN: CLIENT_A decrypts re_encrypted_blob locally → plaintext
+  NOTE: Sender NEVER uses recipientCiphertext — that is mathematically unreadable
+        to them. They always read from senderCiphertext, their own copy of the message.
+        The frontend determines which ciphertext field to use based on:
+          IF message.sender == connectedWallet: use senderCiphertext
+          IF message.recipient == connectedWallet: use recipientCiphertext
+
+================================================================================
+SECTION_2: SMART_CONTRACT_SPECIFICATIONS
+================================================================================
+
+2.1 CONTRACT: MessageStore.sol
+--------------------------------------------------------------------------------
+
+PRAGMA: solidity ^0.8.19
+IMPORTS: [TFHE.sol, Ownable.sol, ReentrancyGuard.sol]
+
+STRUCTS:
+  EncryptedMessage {
+    bytes32     messageId             // keccak256(threadId, sender, timestamp, nonce)
+    address     sender
+    address     recipient
+    ebytes      recipientCiphertext   // [FIX_10] encrypted under recipient's public key
+    ebytes      senderCiphertext      // [FIX_10] encrypted under sender's own public key
+    uint8       storageType           // 0 = on-chain, 1 = IPFS (applies to both ciphertexts)
+    uint256     timestamp
+    ebool       isRead
+    ebool       isBurned
+    uint8       messageType           // 0=text, 1=file, 2=system, 3=reaction
+  }
+  NOTE: Both ciphertext fields store the same plaintext message content, but each
+        is independently encrypted under a different public key. Neither can be
+        used to decrypt by the other party. storageType applies to both — if
+        IPFS, senderCiphertext and recipientCiphertext each get their own IPFS CID.
+
+STORAGE:
+  mapping(bytes32 => EncryptedMessage[])  private threads
+  mapping(bytes32 => uint256)             private threadMessageCount
+  mapping(address => bytes32[])           private userThreadIndex
+  mapping(bytes32 => ebool)               private burnRegistry
+
+FUNCTIONS:
+
+  sendMessage(
+    address     recipient,
+    ebytes      recipientCiphertext,
+    ebytes      senderCiphertext,
+    uint8       storageType,
+    uint8       messageType
+  ) external returns (bytes32 messageId)
+  LOGIC:
+    1. REQUIRE: msg.sender != address(0)
+    2. REQUIRE: IdentityRegistry.isRegistered(msg.sender) == true
+         ERROR: "SENDER_NOT_REGISTERED"  // [FIX_1]
+    3. REQUIRE: recipient != address(0)
+    4. REQUIRE: IdentityRegistry.isRegistered(recipient) == true
+         ERROR: "RECIPIENT_NOT_REGISTERED"  // [SOLUTION_A]
+    5. REQUIRE: recipientCiphertext.length > 0
+         ERROR: "MISSING_RECIPIENT_CIPHERTEXT"
+    6. REQUIRE: senderCiphertext.length > 0
+         ERROR: "MISSING_SENDER_CIPHERTEXT"  // [FIX_10] both fields are mandatory
+    7. REQUIRE: isBlocked(msg.sender, recipient) == false
+    8. REQUIRE: isContactAccepted(msg.sender, recipient) OR isFirstContact(msg.sender, recipient)
+    9. threadId = keccak256(min(msg.sender, recipient), max(msg.sender, recipient))
+    10. messageId = keccak256(threadId, msg.sender, block.timestamp, threadMessageCount[threadId])
+    11. threads[threadId].push(EncryptedMessage{ ..., recipientCiphertext, senderCiphertext })
+    12. emit MessageSent(threadId, msg.sender, recipient, block.timestamp, messageId)
+    13. RETURN messageId
+
+  getMessages(
+    address peer,
+    uint256 offset,
+    uint256 limit
+  ) external view returns (EncryptedMessage[] memory)
+  LOGIC:
+    1. threadId = keccak256(min(msg.sender, peer), max(msg.sender, peer))
+    2. RETURN threads[threadId][offset : offset + limit]
+    NOTE: Caller receives raw ciphertext. Decryption via fhevmjs re-encrypt flow.
+
+  markRead(bytes32 messageId) external
+  LOGIC:
+    1. REQUIRE: msg.sender == message.recipient
+    2. message.isRead = TFHE.asEbool(true)
+
+  burnMessage(bytes32 messageId) external
+  LOGIC:
+    1. REQUIRE: msg.sender == message.sender OR msg.sender == message.recipient
+    2. burnRegistry[messageId] = TFHE.asEbool(true)
+    3. message.encryptedContent = TFHE.asEbytes(bytes(""))  // zero out content
+    NOTE: ciphertext slot persists on-chain but content is overwritten with empty
+
+2.2 CONTRACT: PaymentRouter.sol
+--------------------------------------------------------------------------------
+
+PRAGMA: solidity ^0.8.19
+IMPORTS: [TFHE.sol, IERC20.sol, ReentrancyGuard.sol, SafeERC20.sol]
+
+ENUMS:
+  PaymentStatus { PENDING, FULFILLED, CANCELLED, EXPIRED }
+  EscrowStatus  { LOCKED, RELEASED, DISPUTED, RESOLVED }
+
+STRUCTS:
+  PaymentRequest {
+    bytes32       requestId
+    address       requester
+    address       payer
+    euint64       encryptedAmount    // FHE-encrypted amount
+    address       token              // address(0) = ETH
+    ebytes        encryptedNote
+    uint256       createdAt
+    uint256       expiresAt
+    PaymentStatus status
+  }
+
+  Escrow {
+    bytes32       escrowId
+    address       depositor
+    address       beneficiary
+    address       arbitrator
+    euint64       encryptedAmount
+    address       token
+    ebytes        encryptedTerms
+    EscrowStatus  status
+    ebool         depositorApproved
+    ebool         beneficiaryApproved
+  }
+
+FUNCTIONS:
+
+  sendETH(
+    address     recipient,
+    ebytes      encryptedNote
+  ) external payable
+  LOGIC:
+    1. REQUIRE: IdentityRegistry.isRegistered(msg.sender) == true
+         ERROR: "SENDER_NOT_REGISTERED"  // [FIX_1]
+    2. REQUIRE: IdentityRegistry.isRegistered(recipient) == true
+         ERROR: "RECIPIENT_NOT_REGISTERED"  // [FIX_2]
+         NOTE: ETH transfer succeeds regardless of eChatz registration, but the
+               system message log in MessageStore would revert. Checking here keeps
+               the entire tx atomic — either everything succeeds or nothing does.
+    3. REQUIRE: msg.value > 0
+    4. transfer msg.value to recipient
+    5. emit PaymentSent(msg.sender, recipient, address(0), msg.value, encryptedNote)
+    6. MessageStore.sendMessage(recipient, encryptedNote, 0, 2)  // system message
+
+  sendERC20(
+    address     token,
+    address     recipient,
+    uint256     amount,
+    ebytes      encryptedNote
+  ) external
+  LOGIC:
+    1. REQUIRE: IdentityRegistry.isRegistered(msg.sender) == true
+         ERROR: "SENDER_NOT_REGISTERED"  // [FIX_1]
+    2. REQUIRE: IdentityRegistry.isRegistered(recipient) == true
+         ERROR: "RECIPIENT_NOT_REGISTERED"  // [FIX_2]
+    3. REQUIRE: amount > 0
+    4. SafeERC20.safeTransferFrom(token, msg.sender, recipient, amount)
+    5. emit PaymentSent(msg.sender, recipient, token, amount, encryptedNote)
+
+  createRequest(
+    address     payer,
+    uint256     amount,
+    address     token,
+    ebytes      encryptedNote,
+    uint256     ttl
+  ) external returns (bytes32 requestId)
+  LOGIC:
+    1. REQUIRE: IdentityRegistry.isRegistered(msg.sender) == true
+         ERROR: "SENDER_NOT_REGISTERED"  // [FIX_1]
+    2. REQUIRE: IdentityRegistry.isRegistered(payer) == true
+         ERROR: "PAYER_NOT_REGISTERED"  // [FIX_2]
+    3. requestId = keccak256(msg.sender, payer, amount, block.timestamp)
+    4. store PaymentRequest{...} with expiresAt = block.timestamp + ttl
+    5. emit RequestCreated(requestId, msg.sender, payer, block.timestamp)
+
+  fulfillRequest(bytes32 requestId) external payable
+  LOGIC:
+    1. REQUIRE: request.payer == msg.sender
+    2. REQUIRE: request.status == PENDING
+    3. REQUIRE: block.timestamp <= request.expiresAt
+    4. transfer funds from msg.sender to request.requester
+    5. request.status = FULFILLED
+    6. emit RequestFulfilled(requestId, msg.sender, block.timestamp)
+
+  createEscrow(
+    address     beneficiary,
+    address     arbitrator,
+    address     token,
+    uint256     amount,
+    ebytes      encryptedTerms
+  ) external payable returns (bytes32 escrowId)
+  LOGIC:
+    1. REQUIRE: IdentityRegistry.isRegistered(msg.sender) == true
+         ERROR: "SENDER_NOT_REGISTERED"  // [FIX_1]
+    2. REQUIRE: IdentityRegistry.isRegistered(beneficiary) == true
+         ERROR: "BENEFICIARY_NOT_REGISTERED"  // [FIX_2]
+    3. REQUIRE: IdentityRegistry.isRegistered(arbitrator) == true
+         ERROR: "ARBITRATOR_NOT_REGISTERED"
+         NOTE: [FIX_5] An unregistered arbitrator cannot read encrypted escrow terms,
+               cannot participate in dispute resolution, and cannot see the thread.
+               The escrow would be permanently locked with no resolution path.
+               This check prevents that dead-end entirely.
+    4. REQUIRE: arbitrator != msg.sender AND arbitrator != beneficiary
+         ERROR: "ARBITRATOR_CONFLICT" — arbitrator must be neutral third party
+    5. escrowId = keccak256(msg.sender, beneficiary, amount, block.timestamp)
+    6. store Escrow{...} with status = LOCKED
+    7. emit EscrowCreated(escrowId, msg.sender, beneficiary, arbitrator)
+
+  approveEscrowRelease(bytes32 escrowId) external
+  LOGIC:
+    1. IF msg.sender == escrow.depositor: escrow.depositorApproved = TFHE.asEbool(true)
+    2. IF msg.sender == escrow.beneficiary: escrow.beneficiaryApproved = TFHE.asEbool(true)
+    3. IF TFHE.decrypt(escrow.depositorApproved) && TFHE.decrypt(escrow.beneficiaryApproved):
+         release funds to beneficiary
+         escrow.status = RELEASED
+
+  splitPayment(
+    address[]   participants,
+    uint256     totalAmount,
+    address     token
+  ) external
+  CONSTRAINT: participants.length <= 5  // v1 limit
+  LOGIC:
+    1. REQUIRE: IdentityRegistry.isRegistered(msg.sender) == true  // [FIX_1]
+    2. FOR each participant in participants:
+         REQUIRE: IdentityRegistry.isRegistered(participant) == true  // [FIX_2]
+         ERROR: "PARTICIPANT_NOT_REGISTERED: {participant address}"
+    3. perShare = totalAmount / participants.length
+    4. FOR each participant: createRequest(participant, perShare, token, "", 7 days)
+
+2.3 CONTRACT: IdentityRegistry.sol
+--------------------------------------------------------------------------------
+
+STORAGE:
+  mapping(address => bool)                 public  registered             // plaintext bool — readable by MessageStore
+  mapping(address => uint256)              public  registeredAt           // timestamp of registration
+  mapping(address => bytes)                public  publicKeys             // [FIX_9] raw ECDSA public key (65 bytes uncompressed)
+  mapping(address => ebytes)               private encryptedUsername
+  mapping(address => ebytes)               private encryptedBio
+  mapping(address => mapping(address => ebool)) private blocklist
+  mapping(address => mapping(address => ebytes)) private contactNicknames
+  mapping(address => mapping(address => ebool)) private acceptedContacts
+  mapping(address => address[])            private linkedDevices
+
+EVENTS:
+  event UserRegistered(address indexed user, uint256 timestamp)
+
+FUNCTIONS:
+
+  registerUser(
+    ebytes  encryptedUsername,
+    ebytes  encryptedBio,
+    bytes   publicKey           // [FIX_9] caller provides their own public key explicitly
+  ) external
+  LOGIC:
+    1. REQUIRE: registered[msg.sender] == false
+         ERROR: "ALREADY_REGISTERED"
+    2. REQUIRE: publicKey.length == 65
+         ERROR: "INVALID_PUBLIC_KEY_LENGTH"
+         NOTE: [FIX_9] Uncompressed ECDSA public key is always 65 bytes (0x04 prefix + 32 + 32).
+    3. REQUIRE: _verifyPublicKey(publicKey, msg.sender) == true
+         ERROR: "PUBLIC_KEY_ADDRESS_MISMATCH"
+         NOTE: [FIX_9] Derive Ethereum address from publicKey and confirm it equals msg.sender.
+               Derivation: address(uint160(uint256(keccak256(publicKey[1:65]))))
+               This proves the caller owns the key they are registering — prevents spoofing.
+    4. registered[msg.sender] = true
+    5. registeredAt[msg.sender] = block.timestamp
+    6. publicKeys[msg.sender] = publicKey               // store for encryption use by others
+    7. encryptedUsername[msg.sender] = encryptedUsername
+    8. encryptedBio[msg.sender] = encryptedBio
+    9. emit UserRegistered(msg.sender, block.timestamp)
+    10. IF InviteRegistry.hasPendingInvite(msg.sender):
+          InviteRegistry.redeemInvite(msg.sender)
+
+  _verifyPublicKey(bytes publicKey, address expected) internal pure returns (bool)
+  LOGIC:
+    derived = address(uint160(uint256(keccak256(publicKey[1:65]))))
+    RETURN derived == expected
+
+  getPublicKey(address user) external view returns (bytes memory)
+  LOGIC:
+    1. REQUIRE: registered[user] == true
+         ERROR: "USER_NOT_REGISTERED"
+    2. RETURN publicKeys[user]
+  NOTE: [FIX_9] This is how CLIENT_A fetches the recipient's public key in SUBSTEP_0B
+        before encrypting a message. Public key is intentionally public data —
+        anyone needs it to encrypt a message TO that user. No privacy concern.
+
+  isRegistered(address user) external view returns (bool)
+  RETURNS: registered[user]
+
+  addContact(address addr, ebytes encryptedNickname) external
+  LOGIC:
+    1. contactNicknames[msg.sender][addr] = encryptedNickname
+
+  acceptContact(address addr) external
+  LOGIC:
+    1. acceptedContacts[msg.sender][addr] = TFHE.asEbool(true)
+
+  blockAddress(address addr) external
+  LOGIC:
+    1. blocklist[msg.sender][addr] = TFHE.asEbool(true)
+
+  isBlocked(address owner, address target) external view returns (ebool)
+  RETURNS: blocklist[owner][target]
+
+  linkDevice(address deviceAddr) external
+  LOGIC:
+    1. REQUIRE: linkedDevices[msg.sender].length < 5
+    2. linkedDevices[msg.sender].push(deviceAddr)
+
+2.4 CONTRACT: InviteRegistry.sol  [SOLUTION_A]
+--------------------------------------------------------------------------------
+
+PURPOSE:
+  When sender attempts to message an unregistered address, this contract
+  creates and tracks an on-chain invite. The invite is a lightweight record
+  containing the inviter address, the target address, an optional shareable
+  invite link token, and a creation timestamp. No message content is stored.
+  No encryption is required — invites are fully public metadata.
+
+PRAGMA: solidity ^0.8.19
+IMPORTS: [Ownable.sol]
+DEPENDENCIES: [IdentityRegistry.sol]
+
+STRUCTS:
+  Invite {
+    bytes32   inviteId          // keccak256(inviter, invitee, block.timestamp)
+    address   inviter           // sender who triggered the invite
+    address   invitee           // target unregistered address
+    uint256   createdAt
+    uint256   expiresAt         // default: createdAt + 30 days
+    bool      redeemed          // set true when invitee calls registerUser()
+    bool      cancelled         // set true if inviter cancels
+  }
+
+STORAGE:
+  mapping(bytes32 => Invite)         public invites
+  mapping(address => bytes32[])      public invitesSentBy      // inviter → inviteIds
+  mapping(address => bytes32)        public pendingInviteFor   // invitee → latest inviteId
+  mapping(bytes32 => string)         public inviteLinks        // inviteId → URL token
+
+EVENTS:
+  event InviteCreated(bytes32 indexed inviteId, address indexed inviter, address indexed invitee, uint256 expiresAt)
+  event InviteRedeemed(bytes32 indexed inviteId, address indexed invitee, uint256 timestamp)
+  event InviteCancelled(bytes32 indexed inviteId, address indexed inviter, uint256 timestamp)
+
+FUNCTIONS:
+
+  createInvite(address invitee) external returns (bytes32 inviteId, string inviteLink)
+  LOGIC:
+    1. REQUIRE: IdentityRegistry.isRegistered(invitee) == false
+         ERROR: "TARGET_ALREADY_REGISTERED" — no invite needed
+    2. REQUIRE: pendingInviteFor[invitee] == bytes32(0)
+              OR invites[pendingInviteFor[invitee]].cancelled == true
+              OR invites[pendingInviteFor[invitee]].expiresAt < block.timestamp
+         NOTE: prevent duplicate active invites for the same invitee
+    3. inviteId = keccak256(msg.sender, invitee, block.timestamp)
+    4. linkToken = base58(inviteId)[0:12]  // short unique token, generated off-chain
+    5. inviteLink = "https://echatz.app/join?ref=" + linkToken
+    6. Store Invite{...} with expiresAt = block.timestamp + 30 days
+    7. pendingInviteFor[invitee] = inviteId
+    8. invitesSentBy[msg.sender].push(inviteId)
+    9. inviteLinks[inviteId] = inviteLink
+    10. emit InviteCreated(inviteId, msg.sender, invitee, expiresAt)
+    11. RETURN (inviteId, inviteLink)
+
+  hasPendingInvite(address invitee) external view returns (bool)
+  LOGIC:
+    1. inviteId = pendingInviteFor[invitee]
+    2. IF inviteId == bytes32(0): RETURN false
+    3. invite = invites[inviteId]
+    4. RETURN (
+         invite.redeemed == false AND
+         invite.cancelled == false AND
+         invite.expiresAt >= block.timestamp
+       )
+
+  redeemInvite(address invitee) external
+  CALLER: IdentityRegistry.sol (called internally during registerUser())
+  LOGIC:
+    1. REQUIRE: msg.sender == address(IdentityRegistry)
+    2. inviteId = pendingInviteFor[invitee]
+    3. IF inviteId == bytes32(0): RETURN  // no invite, silent return — registration still succeeds
+    4. invites[inviteId].redeemed = true
+    5. emit InviteRedeemed(inviteId, invitee, block.timestamp)
+
+  cancelInvite(bytes32 inviteId) external
+  LOGIC:
+    1. REQUIRE: invites[inviteId].inviter == msg.sender
+    2. REQUIRE: invites[inviteId].redeemed == false
+    3. invites[inviteId].cancelled = true
+    4. emit InviteCancelled(inviteId, msg.sender, block.timestamp)
+
+  getInviteStatus(bytes32 inviteId) external view returns (Invite memory)
+  RETURNS: invites[inviteId]
+
+CROSS_DEPLOYMENT_CONSTRAINT [FIX_8]:
+  PROBLEM: If an invite is created on chain/deployment X, but the invitee registers
+           on a different deployment or chain Y, the redeemInvite() call in
+           IdentityRegistry on chain X never fires. The invite stays PENDING forever
+           and the inviter never gets notified.
+  RESOLUTION:
+    1. CANONICAL_DEPLOYMENT: eChatz runs one authoritative deployment per network.
+       The canonical contract addresses are hardcoded in the frontend env vars.
+       There is no multi-deployment ambiguity within a single network.
+    2. INVITE_LINK_INCLUDES_CHAIN: The invite link encodes the chainId:
+         https://echatz.app/join?ref={token}&chain={chainId}
+       Frontend reads chainId from link and prompts wallet to switch to correct
+       network before registering. If wallet cannot switch: display error with
+       instructions.
+    3. CROSS_CHAIN_EDGE_CASE: If eChatz later deploys on multiple chains, treat
+       each chain as an isolated app instance. Invites are chain-scoped and
+       non-transferable across chains. Document this clearly in user-facing copy.
+
+FRONTEND_INVITE_FLOW:
+  TRIGGER: IdentityRegistry.isRegistered(recipientAddr) == false
+  STEP_1: Display modal:
+    "0xABCD...1234 hasn't joined eChatz yet."
+    [Send Invite] [Cancel]
+  STEP_2: User clicks [Send Invite]
+    → call InviteRegistry.createInvite(recipientAddr)
+    → receive inviteLink from return value
+  STEP_3: Display share sheet:
+    "Share this link with them:"
+    [ https://echatz.app/join?ref=xK9mPqR2aB3c ]  [Copy] [Share]
+  STEP_4: Invitee clicks link → lands on eChatz landing page
+    → URL param ref=xK9mPqR2aB3c is parsed by frontend
+    → InviteRegistry.getInviteStatus(inviteId) called to show:
+      "You've been invited by [inviter ENS or short address] to join eChatz"
+    → [Connect Wallet & Join] button → triggers registerUser() flow
+  STEP_5: Invitee calls IdentityRegistry.registerUser(...)
+    → registerUser() calls InviteRegistry.redeemInvite(invitee)
+    → invite marked redeemed on-chain
+    → inviter gets a notification via Push Protocol: "Your invite was accepted!"
+  STEP_6: Invitee is now registered
+    → Sender's pending message attempt is unblocked
+    → Sender can now open a thread and message the newly registered user
+
+INVITE_LINK_RESOLUTION_SPEC:
+  URL_PATTERN:      https://echatz.app/join?ref={linkToken}
+  LINK_TOKEN:       first 12 chars of base58(inviteId) — URL-safe, short
+  REVERSE_LOOKUP:   frontend maintains inviteId ↔ linkToken mapping via subgraph
+  FALLBACK:         if linkToken not found → show generic eChatz join page
+
+2.5 CONTRACT: VotingModule.sol
+--------------------------------------------------------------------------------
+
+STRUCTS:
+  Poll {
+    bytes32   pollId
+    bytes32   threadId
+    address   creator
+    string    question
+    string[]  options
+    uint256   endsAt
+    ebool     isClosed
+    mapping(address => ebool)   hasVoted
+    mapping(uint8 => euint32)   encryptedTally  // tally per option, FHE-encrypted
+  }
+
+FUNCTIONS:
+
+  createPoll(
+    bytes32   threadId,
+    string    question,
+    string[]  options,
+    uint256   duration
+  ) external returns (bytes32 pollId)
+
+  castVote(bytes32 pollId, euint8 encryptedChoice) external
+  LOGIC:
+    1. REQUIRE: TFHE.decrypt(poll.hasVoted[msg.sender]) == false
+    2. REQUIRE: block.timestamp < poll.endsAt
+    3. FOR each option i:
+         poll.encryptedTally[i] = TFHE.add(
+           poll.encryptedTally[i],
+           TFHE.cmux(TFHE.eq(encryptedChoice, TFHE.asEuint8(i)), TFHE.asEuint32(1), TFHE.asEuint32(0))
+         )
+    4. poll.hasVoted[msg.sender] = TFHE.asEbool(true)
+    NOTE: TFHE.cmux = encrypted conditional mux — prevents revealing which option was chosen
+
+  closePoll(bytes32 pollId) external
+  LOGIC:
+    1. REQUIRE: block.timestamp >= poll.endsAt OR msg.sender == poll.creator
+    2. poll.isClosed = TFHE.asEbool(true)
+    3. emit PollClosed(pollId, block.timestamp)
+    NOTE: Results readable after close via TFHE.decrypt() — only after reveal phase
+
+================================================================================
+SECTION_3: FHE_TYPE_MAPPING
+================================================================================
+
+USE_CASE                          TFHE_TYPE     RATIONALE
+--------------------------------  ----------    --------------------------------
+Message content (recipient copy)  ebytes        [FIX_10] encrypted under recipient public key
+Message content (sender copy)     ebytes        [FIX_10] encrypted under sender public key
+Payment amount (private)          euint64       64-bit unsigned, sufficient for token amounts
+Read status                       ebool         Binary flag, minimal gas
+Burn status                       ebool         Binary flag
+Block flag                        ebool         Per-address binary flag
+Vote choice                       euint8        0-255 option index
+Vote tally per option             euint32       Aggregate count per option
+Profile fields (username, bio)    ebytes        Arbitrary string content
+Contact nickname                  ebytes        Arbitrary string content
+Device link status                ebool         Binary authorization flag
+Escrow release approval           ebool         Binary per-party approval
+Public key                        bytes (plain) [FIX_9] 65-byte uncompressed ECDSA key — NOT FHE
+                                                Public keys are intentionally public data.
+                                                Encrypting them would prevent others from
+                                                using them to encrypt messages.
+
+TFHE_OPERATIONS_USED:
+  TFHE.asEbytes(bytes)            → wrap plaintext bytes as ciphertext
+  TFHE.asEuint64(uint64)          → wrap uint64 as encrypted integer
+  TFHE.asEbool(bool)              → wrap bool as encrypted boolean
+  TFHE.add(euint32, euint32)      → homomorphic addition (vote tallying)
+  TFHE.eq(euint8, euint8)         → homomorphic equality check (vote routing)
+  TFHE.gt(euint64, euint64)       → homomorphic greater-than (/verify command)
+  TFHE.cmux(ebool, euintX, euintX)→ encrypted conditional multiplexer
+  TFHE.decrypt(eType)             → decrypt to plaintext (caller must be authorized)
+
+================================================================================
+SECTION_4: SLASH_COMMAND_PARSER_SPECIFICATION
+================================================================================
+
+PARSER_LOCATION: CLIENT_SIDE (Next.js frontend)
+TRIGGER: input string starts with "/"
+REGEX_PATTERN: ^\/([a-z]+)\s(.+)$
+
+COMMAND_ROUTING_TABLE:
+
+  INPUT_PATTERN                          CONTRACT_TARGET        FUNCTION
+  /send {amount} {token}                 PaymentRouter.sol      sendETH() OR sendERC20()
+  /request {amount} {token} {note}       PaymentRouter.sol      createRequest()
+  /split {amount} {token} {addrs...}     PaymentRouter.sol      splitPayment()
+  /escrow {amount} {token} {terms}       PaymentRouter.sol      createEscrow()
+  /vote {question} [{opt1},{opt2}...]     VotingModule.sol       createPoll()
+  /tip {amount} {messageId}              PaymentRouter.sol      sendETH() with messageId ref
+  /nft {contractAddr} {tokenId}          ERC721.safeTransferFrom direct call
+  /verify balance > {amount} {token}     IdentityRegistry.sol   verifyBalance() [v2]
+  /schedule {amount} {token} {interval}  ScheduleModule.sol     schedulePayment()
+
+PARSER_LOGIC:
+  FUNCTION parseCommand(inputString):
+    IF NOT inputString.startsWith("/"): RETURN type=TEXT, payload=inputString
+    tokens = inputString.split(" ")
+    command = tokens[0].toLowerCase()
+    args = tokens.slice(1)
+    SWITCH command:
+      CASE "/send":
+        amount = parseFloat(args[0])
+        token  = args[1].toUpperCase()  // "ETH", "USDC", etc.
+        RETURN { type: COMMAND, command: "send", amount, token }
+      CASE "/request":
+        amount = parseFloat(args[0])
+        token  = args[1].toUpperCase()
+        note   = args.slice(2).join(" ")
+        RETURN { type: COMMAND, command: "request", amount, token, note }
+      [... analogous for all other commands]
+      DEFAULT:
+        RETURN { type: ERROR, message: "Unknown command" }
+
+================================================================================
+SECTION_5: GAS_COST_MANAGEMENT_STRATEGY
+================================================================================
+
+5.1 ON_CHAIN_VS_IPFS_ROUTING_LOGIC
+--------------------------------------------------------------------------------
+
+DECISION_FUNCTION: routeMessageStorage(payloadBytes):
+  IF len(payloadBytes) <= 512:
+    STORE: full ebytes ciphertext on-chain in MessageStore.sol
+    storageType = 0
+  ELSE:
+    STEP_1: upload ciphertext blob to IPFS via ipfs.add(payloadBytes)
+    STEP_2: receive CID (Content Identifier string)
+    STEP_3: pointer = keccak256(toBytes(CID))  // 32 bytes
+    STORE: pointer as ebytes32 on-chain in MessageStore.sol
+    storageType = 1
+  RETURN { storageType, onChainPayload }
+
+RETRIEVAL_FUNCTION: resolveMessage(message):
+  IF message.storageType == 0:
+    RETURN message.encryptedContent  // full ciphertext already on-chain
+  IF message.storageType == 1:
+    CID = reverseLookup(message.encryptedContent)  // from local cache or indexer
+    blob = ipfs.cat(CID)
+    IF blob == null OR fetch_timeout:
+      TRIGGER: content_missing_handler (see below)
+    RETURN blob  // still encrypted; proceed to re-encrypt + decrypt flow
+
+IPFS_PINNING_STRATEGY [FIX_3]:
+  PROBLEM: IPFS has no persistence guarantee unless content is actively pinned.
+           If the pinning service drops content, the on-chain pointer becomes a
+           permanent broken link. The message bubble renders but never decrypts.
+  DUAL_PIN_POLICY:
+    PRIMARY_PIN:   Pinata (pinata.cloud) — commercial, reliable SLA
+    SECONDARY_PIN: web3.storage OR Infura IPFS — independent provider
+    TRIGGER: pin to BOTH services on every IPFS upload before storing pointer on-chain
+    IMPLEMENTATION:
+      async function pinToBothProviders(ciphertext):
+        [result1, result2] = await Promise.allSettled([
+          pinata.pinFileToIPFS(ciphertext),
+          web3storage.put(ciphertext)
+        ])
+        IF result1.status == "rejected" AND result2.status == "rejected":
+          THROW Error("IPFS_PIN_FAILED") — abort message send, do not store on-chain
+        IF only one succeeds: log warning, proceed (single pin is acceptable fallback)
+        RETURN CID from whichever succeeded (both return same CID for same content)
+  RE_PIN_ON_RETRIEVAL:
+    IF message is fetched and storageType == 1:
+      silently re-pin CID to primary provider in background
+      REASON: distributes pinning load, refreshes TTL on any provider with expiry
+
+CONTENT_MISSING_HANDLER [FIX_3]:
+  TRIGGER: ipfs.cat(CID) fails after 10 second timeout or 3 retry attempts
+  DISPLAY: message bubble shows lock icon + warning:
+    "This message could not be retrieved. The content may no longer be available."
+  DO NOT: show empty bubble, hang indefinitely, or throw unhandled exception
+  LOG: { messageId, CID, timestamp, errorType } to error tracking service
+  OFFER: [Report Issue] button — logs to protocol monitoring dashboard
+
+5.2 ERC-4337_SESSION_KEY_SPECIFICATION
+--------------------------------------------------------------------------------
+
+STANDARD: ERC-4337 (Account Abstraction)
+PURPOSE: Eliminate per-message wallet signature prompts
+IMPLEMENTATION: Biconomy SDK OR ZeroDev Kernel
+
+SESSION_KEY_POLICY:
+  ALLOWED_CONTRACTS: [MessageStore.sol, PaymentRouter.sol (low-value only)]
+  ALLOWED_FUNCTIONS: [sendMessage, markRead, reactToMessage]
+  SPENDING_LIMIT:    0.001 ETH per session (prevents drain attacks)
+  SESSION_DURATION:  configurable by user (default: 4 hours)
+  REVOCATION:        user can revoke session key on-demand from settings UI
+
+USER_OPERATION_FLOW:
+  1. User opens eChatz, connects wallet
+  2. ONE signature: approve session key with above policy
+  3. All subsequent sendMessage() calls:
+     a. frontend constructs UserOperation struct
+     b. sends to Bundler (Biconomy/Pimlico)
+     c. Bundler submits to EntryPoint contract
+     d. EntryPoint validates session key policy
+     e. MessageStore.sendMessage() executes
+     f. User sees message delivered — zero wallet popups
+
+SESSION_EXPIRY_HANDLING [FIX_6]:
+  PROBLEM: Session key has a finite TTL (default 4 hours). When it expires,
+           the next UserOperation is silently rejected by EntryPoint. The user
+           hits send and nothing happens — no error, no feedback.
+  DETECTION_STRATEGY:
+    1. PROACTIVE (preferred): Track session key expiresAt in local state.
+       5 minutes before expiry, display non-blocking banner:
+         "Your session expires soon. [Renew Session] to keep chatting without interruptions."
+       [Renew Session] → prompt ONE wallet signature → issue new session key
+       Do this in the background if user ignores the banner — prompt on next send.
+    2. REACTIVE (fallback): If UserOperation is rejected with error code
+       AA24 (EntryPoint: signature error) or AA22 (expired):
+         Catch error in Bundler response handler
+         Display: "Your session has expired. Sign to continue."
+         Block the failed message from showing as sent
+         After renewal, automatically retry the failed message submission
+  SESSION_STATE:
+    ACTIVE    → session key valid, all sends go through silently
+    EXPIRING  → < 5 minutes remaining, show renewal banner
+    EXPIRED   → reject detected, block sends, prompt renewal
+    RENEWING  → renewal signature pending, show loading state
+  STORAGE: session key metadata stored in browser localStorage:
+    { keyAddress, expiresAt, allowedContracts, spendingLimit }
+  ON_WALLET_DISCONNECT: invalidate all session state immediately
+
+================================================================================
+SECTION_6: INDEXER_SPECIFICATION (THE_GRAPH)
+================================================================================
+
+SUBGRAPH_ENTITIES:
+
+  Thread {
+    id:           ID!              // threadId (bytes32)
+    participants: [String!]!       // [addressA, addressB]
+    messageCount: BigInt!
+    lastActivity: BigInt!
+  }
+
+  Message {
+    id:            ID!             // messageId (bytes32)
+    thread:        Thread!
+    sender:        String!
+    recipient:     String!
+    timestamp:     BigInt!
+    messageType:   Int!
+    storageType:   Int!
+  }
+
+  PaymentEvent {
+    id:            ID!
+    sender:        String!
+    recipient:     String!
+    token:         String!
+    timestamp:     BigInt!
+    txHash:        String!
+  }
+
+  RegisteredUser {
+    id:            ID!             // wallet address
+    registeredAt:  BigInt!
+  }
+
+  Invite {
+    id:            ID!             // inviteId (bytes32)
+    inviter:       String!
+    invitee:       String!
+    inviteLink:    String!
+    createdAt:     BigInt!
+    expiresAt:     BigInt!
+    redeemed:      Boolean!
+    cancelled:     Boolean!
+  }
+
+INDEXED_EVENTS:
+  - MessageStore.MessageSent           → creates Message entity
+  - PaymentRouter.PaymentSent          → creates PaymentEvent entity
+  - PaymentRouter.RequestCreated       → creates PaymentRequest entity
+  - VotingModule.PollCreated           → creates Poll entity
+  - VotingModule.PollClosed            → updates Poll entity
+  - IdentityRegistry.UserRegistered    → creates RegisteredUser entity
+  - InviteRegistry.InviteCreated       → creates Invite entity
+  - InviteRegistry.InviteRedeemed      → updates Invite.redeemed = true
+  - InviteRegistry.InviteCancelled     → updates Invite.cancelled = true
+
+QUERY_EXAMPLES:
+
+  // Check if an address is registered (used in STEP_0 preflight)
+  query IsRegistered($addr: String!) {
+    registeredUser(id: $addr) { id registeredAt }
+  }
+
+  // Get pending invite for an address
+  query GetPendingInvite($invitee: String!) {
+    invites(where: { invitee: $invitee, redeemed: false, cancelled: false }) {
+      id inviter inviteLink expiresAt
+    }
+  }
+
+  // Get all threads for a user
+  query GetThreads($user: String!) {
+    threads(where: { participants_contains: [$user] }, orderBy: lastActivity, orderDirection: desc) {
+      id participants messageCount lastActivity
+    }
+  }
+
+  // Get messages for a thread (paginated)
+  query GetMessages($threadId: ID!, $skip: Int!, $first: Int!) {
+    messages(where: { thread: $threadId }, skip: $skip, first: $first, orderBy: timestamp) {
+      id sender recipient timestamp messageType storageType
+    }
+  }
+
+================================================================================
+SECTION_7: NOTIFICATION_SPECIFICATION (PUSH_PROTOCOL)
+================================================================================
+
+CHANNEL_OWNER: eChatz deployer address
+CHANNEL_TYPE: Push Protocol Channel (opt-in)
+
+NOTIFICATION_TRIGGERS:
+
+  EVENT                  TRIGGER_SOURCE           NOTIFICATION_PAYLOAD
+  New message received   MessageSent event         { type: "MESSAGE", threadId, sender }
+  Payment request        RequestCreated event      { type: "REQUEST", amount, token, from }
+  Escrow update          EscrowEvent               { type: "ESCROW", status, escrowId }
+  Poll created           PollCreated event         { type: "POLL", question, pollId }
+  Split payment request  SplitCreated event        { type: "SPLIT", amount, from }
+  Invite accepted        InviteRedeemed event      { type: "INVITE_REDEEMED", invitee, inviteId }
+
+NOTE: notification payloads contain metadata ONLY. No message content in payload.
+      Content is retrieved and decrypted separately by client via fhevmjs.
+
+INTEGRATION_PATTERN:
+  1. Smart contract emits event
+  2. Subgraph detects event, triggers webhook
+  3. Webhook calls Push Protocol REST API to send notification
+  4. Push Protocol delivers to subscribed client wallets
+  5. Client receives push → fetches + decrypts content independently
+
+================================================================================
+SECTION_8: FEASIBILITY_MATRIX
+================================================================================
+
+FEATURE                              FEASIBILITY   BLOCKER              MITIGATION / FIX
+----------------------------------   ------------- -------------------- ----------------------------
+Encrypted P2P text messages          HIGH          none                 n/a
+/send ETH                            HIGH          none                 n/a
+/send ERC20                          HIGH          none                 n/a
+/request payment                     HIGH          none                 n/a
+ENS resolution                       HIGH          none                 n/a
+The Graph indexing                   HIGH          none                 n/a
+Encrypted user profiles              HIGH          none                 n/a
+Contact list / blocklist             HIGH          none                 n/a
+Registration gate (Solution A)       HIGH          none                 isRegistered() plain bool view call
+Invite link + redemption flow        HIGH          none                 InviteRegistry.sol
+FIX_1: Sender registration gate      HIGH          none                 REQUIRE(isRegistered(sender)) in all fns
+FIX_2: Slash cmd registration gate   HIGH          none                 REQUIRE(isRegistered(recipient)) in PaymentRouter
+FIX_3: IPFS dual-pin strategy        HIGH          none                 Pinata + web3.storage dual pin; missing handler
+FIX_4: ENS resolution at send time   HIGH          none                 resolve + confirm before encrypt; store raw addr
+FIX_5: Unregistered arbitrator gate  HIGH          none                 REQUIRE(isRegistered(arbitrator)) in createEscrow
+FIX_6: Session key expiry handling   MEDIUM-HIGH   UX timing            proactive banner + reactive retry on AA24/AA22
+FIX_7: Reorg detection               MEDIUM-HIGH   polling complexity   state machine + txHash tracking + resend prompt
+FIX_8: Cross-deployment invite       HIGH          none                 chainId in invite URL + network switch prompt
+FIX_9: Public key sourcing           HIGH          none                 submitted at registerUser(); verified vs address
+FIX_10: Dual ciphertext per message  HIGH          ~2x content gas      unavoidable cost; necessary for sender history
+/escrow (basic)                      MEDIUM-HIGH   dispute logic        simple 2-of-2 multisig v1
+Push notifications                   MEDIUM-HIGH   webhook infra        use hosted Push nodes
+/vote encrypted poll                 MEDIUM        gas per voter        limit options to 5, voters to 20
+On-chain large message storage       MEDIUM        gas cost             IPFS hybrid routing + dual-pin
+/split multi-party                   MEDIUM        coordination gas     cap at 5 participants
+Session keys (ERC-4337)              MEDIUM        SDK integration      Biconomy/ZeroDev SDK
+/schedule recurring payments         MEDIUM        no EVM cron          Gelato/Chainlink Automation
+Group chats                          LOW-MEDIUM    key management       defer to v2
+Burn after read (true delete)        LOW           immutable chain      overwrite both ciphertext slots
+/verify FHE balance proof            LOW-MEDIUM    TFHE.gt() design     v2 feature
+Real-time <1s delivery               LOW           block time           optimistic UI + websockets + reorg detection
+
+================================================================================
+SECTION_9: DEPLOYMENT_SEQUENCE
+================================================================================
+
+PHASE_1_CONTRACTS (deploy order matters for dependencies):
+  1. IdentityRegistry.sol         // no dependencies
+  2. InviteRegistry.sol           // depends on: IdentityRegistry (for isRegistered check)
+  3. MessageStore.sol             // depends on: IdentityRegistry (for isRegistered + isBlocked)
+  4. PaymentRouter.sol            // depends on: MessageStore (for system messages)
+  5. VotingModule.sol             // depends on: MessageStore (for thread validation)
+  6. ScheduleModule.sol           // depends on: PaymentRouter
+
+CONSTRUCTOR_PARAMS:
+  IdentityRegistry()
+  InviteRegistry(address identityRegistry)
+  MessageStore(address identityRegistry)
+  PaymentRouter(address messageStore, address protocolFeeRecipient, uint16 feeBps)
+  VotingModule(address messageStore)
+  ScheduleModule(address paymentRouter, address automationRegistry)
+
+POST_DEPLOY_WIRING:
+  IdentityRegistry.setInviteRegistry(address inviteRegistry)
+  NOTE: IdentityRegistry needs InviteRegistry address for redeemInvite() call
+        in registerUser(). Set after both contracts are deployed.
+
+PROXY_PATTERN: UUPS (EIP-1822)
+  REASON: fhEVM is evolving; contracts must be upgradeable
+  IMPLEMENTATION: OpenZeppelin UUPSUpgradeable
+
+POST_DEPLOY:
+  1. Initialize The Graph subgraph with contract addresses
+  2. Register Push Protocol channel with deployer wallet
+  3. Configure Gelato/Chainlink Automation for ScheduleModule
+  4. Deploy frontend to Vercel, inject contract addresses as env vars
+
+================================================================================
+SECTION_10: ENVIRONMENT_VARIABLES_SPECIFICATION
+================================================================================
+
+VARIABLE                            TYPE     DESCRIPTION
+----------------------------------  -------- ------------------------------------
+NEXT_PUBLIC_MESSAGE_STORE_ADDR      address  MessageStore.sol deployed address
+NEXT_PUBLIC_PAYMENT_ROUTER_ADDR     address  PaymentRouter.sol deployed address
+NEXT_PUBLIC_IDENTITY_REGISTRY_ADDR  address  IdentityRegistry.sol deployed address
+NEXT_PUBLIC_INVITE_REGISTRY_ADDR    address  InviteRegistry.sol deployed address
+NEXT_PUBLIC_VOTING_MODULE_ADDR      address  VotingModule.sol deployed address
+NEXT_PUBLIC_CHAIN_ID                uint256  Target chain ID
+NEXT_PUBLIC_FHEVM_NETWORK           string   "devnet" | "testnet" | "mainnet"
+NEXT_PUBLIC_GRAPH_URL               string   The Graph subgraph endpoint URL
+NEXT_PUBLIC_PUSH_CHANNEL_ADDR       address  Push Protocol channel owner address
+NEXT_PUBLIC_IPFS_GATEWAY            string   IPFS gateway URL for content fetch
+NEXT_PUBLIC_APP_BASE_URL            string   Base URL for invite link generation (e.g. https://echatz.app)
+IPFS_API_KEY                        string   Infura/Pinata IPFS API key (server-side)
+GELATO_API_KEY                      string   Gelato automation API key (server-side)
+
+================================================================================
+SECTION_11: KNOWN_CONSTRAINTS
+================================================================================
+
+CONSTRAINT_1:
+  ID: BLOCK_TIME_LATENCY
+  DESCRIPTION: Message delivery latency = block confirmation time on target chain
+  IMPACT: User experience degradation vs centralized messaging apps
+  MITIGATION: Optimistic UI — display message immediately, confirm async
+  RESIDUAL_RISK: LOW (acceptable for Web3-native users)
+
+CONSTRAINT_2:
+  ID: CIPHERTEXT_SIZE_OVERHEAD
+  DESCRIPTION: FHE ciphertext is significantly larger than plaintext input
+  QUANTIFICATION: ~100x expansion ratio for TFHE ciphertext vs plaintext
+  IMPACT: On-chain storage gas cost scales with ciphertext size
+  MITIGATION: 512-byte on-chain cap, IPFS routing for larger payloads
+  RESIDUAL_RISK: LOW with hybrid routing
+
+CONSTRAINT_3:
+  ID: KEY_LOSS_IRRECOVERABLE
+  DESCRIPTION: Loss of wallet private key = loss of access to all encrypted messages
+  IMPACT: HIGH for end users unfamiliar with key custody
+  MITIGATION: Recommend social recovery wallets (Safe, Argent); UX warning at onboarding
+  RESIDUAL_RISK: MEDIUM (user education dependency)
+
+CONSTRAINT_4:
+  ID: FHEVM_API_STABILITY
+  DESCRIPTION: Zama fhEVM library APIs subject to change during developer program period
+  IMPACT: Contract interface may need updates
+  MITIGATION: UUPS upgradeable proxy pattern; pin fhevmjs version in package.json
+  RESIDUAL_RISK: LOW-MEDIUM
+
+CONSTRAINT_5:
+  ID: TRUE_DELETION_IMPOSSIBLE
+  DESCRIPTION: Blockchain state is immutable; burned messages leave ciphertext slot
+  IMPACT: Burn-after-read is a functional approximation only, not cryptographic guarantee
+  MITIGATION: Overwrite ciphertext slot with empty ebytes; refuse re-encryption requests
+  RESIDUAL_RISK: LOW (practical inaccessibility achieved even if slot persists)
+
+CONSTRAINT_6:
+  ID: UNREGISTERED_RECIPIENT
+  DESCRIPTION: Sender attempts to message an address that has never registered on eChatz
+  RESOLUTION: Solution A — registration gate at two layers (client preflight + contract REQUIRE)
+  RESIDUAL_RISK: NONE
+
+CONSTRAINT_7:
+  ID: UNREGISTERED_SENDER [FIX_1]
+  DESCRIPTION: Unregistered sender has no fhEVM key context — cannot produce valid ciphertext
+  RESOLUTION:
+    CLIENT: SUBSTEP_0A at app boot — full UI blocked until sender is registered
+    CONTRACT: REQUIRE(isRegistered(msg.sender)) as first check in sendMessage() and all
+              PaymentRouter functions — hard revert if bypassed
+  RESIDUAL_RISK: NONE
+
+CONSTRAINT_8:
+  ID: SLASH_CMD_BYPASS_GATE [FIX_2]
+  DESCRIPTION: PaymentRouter functions execute ETH/ERC20 transfers independently of MessageStore.
+               Without registration checks, /send to unregistered address transfers funds
+               but the MessageStore system message reverts — broken atomic tx or lost funds.
+  RESOLUTION: REQUIRE(isRegistered(sender)) and REQUIRE(isRegistered(recipient)) added as
+              first two checks in sendETH(), sendERC20(), createRequest(), createEscrow(),
+              and splitPayment(). All tx steps are now gated — atomically consistent.
+  RESIDUAL_RISK: NONE
+
+CONSTRAINT_9:
+  ID: IPFS_CONTENT_UNAVAILABLE [FIX_3]
+  DESCRIPTION: IPFS has no persistence guarantee. If pinning lapses, on-chain pointer
+               becomes a permanent broken link — message bubble renders, content never loads.
+  RESOLUTION:
+    DUAL_PIN: Pin to Pinata (primary) AND web3.storage (secondary) on every upload.
+              Both must fail for the upload to abort.
+    RE_PIN: Silently re-pin on every successful fetch to refresh TTL.
+    MISSING_HANDLER: 10s timeout + 3 retries → display graceful error in message bubble.
+  RESIDUAL_RISK: LOW (requires simultaneous failure of two independent pinning services)
+
+CONSTRAINT_10:
+  ID: ENS_NAME_STALENESS [FIX_4]
+  DESCRIPTION: ENS names are transferable. A name resolved at search time may resolve to a
+               different address at send time. Messages could be sent to the wrong person.
+  RESOLUTION:
+    Resolve ENS name at the moment of send — not at search/display time.
+    Store raw resolved address in thread record — ENS name is display-only.
+    Show resolved address to sender for confirmation before encrypting.
+  RESIDUAL_RISK: NONE (resolution freshness guaranteed at send moment)
+
+CONSTRAINT_11:
+  ID: UNREGISTERED_ARBITRATOR [FIX_5]
+  DESCRIPTION: An unregistered escrow arbitrator cannot read encrypted terms, participate
+               in disputes, or see the thread. Escrow becomes permanently locked.
+  RESOLUTION: REQUIRE(isRegistered(arbitrator)) in createEscrow() before accepting arbitrator.
+              Additional REQUIRE: arbitrator != depositor AND arbitrator != beneficiary.
+  RESIDUAL_RISK: NONE
+
+CONSTRAINT_12:
+  ID: SESSION_KEY_EXPIRY [FIX_6]
+  DESCRIPTION: ERC-4337 session key has a finite TTL. Expiry causes silent UserOperation
+               rejection — user hits send, nothing happens, no error shown.
+  RESOLUTION:
+    PROACTIVE: Banner 5 minutes before expiry with [Renew Session] button.
+    REACTIVE: Catch EntryPoint error codes AA24/AA22, block send, prompt renewal,
+              auto-retry failed message after renewal completes.
+    STATE_MACHINE: ACTIVE → EXPIRING → EXPIRED → RENEWING → ACTIVE
+  RESIDUAL_RISK: LOW (brief window between expiry and renewal if user ignores banner)
+
+CONSTRAINT_13:
+  ID: CHAIN_REORG_OPTIMISTIC_MESSAGE [FIX_7]
+  DESCRIPTION: Chain reorg can orphan a confirmed-looking tx. Optimistic UI shows message
+               as delivered but it was never stored on-chain. User is unaware of data loss.
+  RESOLUTION:
+    Track { txHash, blockNumber } per pending message.
+    Poll tx status; detect blockNumber change → mark FAILED.
+    Timeout after 3 minutes → mark FAILED.
+    CONFIRMED only after N block confirmations (N=3 on L2, N=12 on mainnet).
+    Offer [Resend] on FAILED state.
+  RESIDUAL_RISK: LOW (reorgs are rare on L2; detection + resend covers all cases)
+
+CONSTRAINT_14:
+  ID: CROSS_DEPLOYMENT_INVITE [FIX_8]
+  DESCRIPTION: Invite created on chain X; invitee registers on chain Y.
+               redeemInvite() never fires. Inviter never notified.
+  RESOLUTION:
+    Invite link encodes chainId: ?ref={token}&chain={chainId}
+    Frontend reads chainId from link, prompts wallet to switch network.
+    Each chain deployment is isolated — invites are chain-scoped by design.
+    Document as expected behaviour in user-facing copy.
+  RESIDUAL_RISK: VERY LOW (mitigated by chainId in URL; requires user to intentionally
+                 register on wrong chain — not a common failure mode)
+
+CONSTRAINT_15:
+  ID: PUBLIC_KEY_SOURCING_UNDEFINED [FIX_9]
+  DESCRIPTION: fhEVM message encryption requires the recipient's public key.
+               Ethereum addresses are hashes of public keys — the raw key is only
+               revealed when the address signs its first transaction. The spec
+               previously had no defined mechanism for storing or retrieving public keys.
+               Without this, SUBSTEP_0B had no key to encrypt with even if registration passed.
+  RESOLUTION:
+    registerUser() now accepts the caller's raw 65-byte uncompressed ECDSA public key.
+    The contract derives the expected address from the submitted key and verifies it
+    matches msg.sender — preventing key spoofing.
+    The verified key is stored in IdentityRegistry.publicKeys[address].
+    getPublicKey(address) is a new public view function — called in SUBSTEP_0B before
+    encryption. It is guaranteed to return a valid key for any registered address.
+  RESIDUAL_RISK: NONE — key presence is enforced as a registration invariant
+
+CONSTRAINT_16:
+  ID: SENDER_CANNOT_READ_OWN_MESSAGES [FIX_10]
+  DESCRIPTION: If a message is encrypted only under the recipient's public key,
+               the sender has no key capable of decrypting it. Scrolling back through
+               sent message history shows only locked ciphertext — the sender cannot
+               read their own words. This is a fundamental UX failure.
+  RESOLUTION:
+    Every sendMessage() call now produces TWO ciphertexts:
+      recipientCiphertext — encrypted under recipient's public key
+      senderCiphertext    — encrypted under sender's own public key
+    Both are stored in EncryptedMessage struct on-chain.
+    Frontend selects which to decrypt based on viewer identity:
+      message.sender == connectedWallet → decrypt senderCiphertext
+      message.recipient == connectedWallet → decrypt recipientCiphertext
+    burnMessage() now zeroes BOTH ciphertext fields.
+    IPFS uploads (storageType=1) pin both ciphertexts separately.
+  GAS_IMPACT: On-chain content storage cost approximately doubles.
+              This is the unavoidable price of sender read history.
+              Mitigated by IPFS hybrid routing for messages > 512 bytes.
+  RESIDUAL_RISK: NONE
+
+================================================================================
+END_OF_DOCUMENT
+DOCUMENT_ID: ECHATZ_SPEC_V4
+FIXES_APPLIED: [FIX_1, FIX_2, FIX_3, FIX_4, FIX_5, FIX_6, FIX_7, FIX_8, FIX_9, FIX_10]
+CHECKSUM: [to be generated post-finalization]
+================================================================================

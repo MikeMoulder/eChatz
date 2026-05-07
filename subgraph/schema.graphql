@@ -1,0 +1,82 @@
+type RegisteredUser @entity(immutable: true) {
+  id: ID!                    # address
+  registeredAt: BigInt!
+}
+
+type Thread @entity(immutable: false) {
+  id: ID!                    # threadId (uint256 as string)
+  participants: [String!]!   # [address, address]
+  messageCount: BigInt!
+  lastActivity: BigInt!
+  messages: [Message!]! @derivedFrom(field: "thread")
+}
+
+type Message @entity(immutable: true) {
+  id: ID!                    # messageId
+  thread: Thread!
+  sender: String!
+  recipient: String!
+  timestamp: BigInt!
+  messageType: Int!          # 0=text, 1=payment, 2=vote
+  storageType: Int!          # 0=on-chain, 1=IPFS
+  # NOTE: No ciphertext handles in subgraph — metadata only
+}
+
+type PaymentEvent @entity(immutable: true) {
+  id: ID!                    # txHash-logIndex
+  from: String!
+  to: String!
+  token: String!
+  amount: BigInt!
+  timestamp: BigInt!
+}
+
+type PaymentRequest @entity(immutable: false) {
+  id: ID!                    # requestId
+  requester: String!
+  payer: String!
+  token: String!
+  createdAt: BigInt!
+  fulfilled: Boolean!
+}
+
+type EscrowEvent @entity(immutable: false) {
+  id: ID!                    # escrowId
+  depositor: String!
+  beneficiary: String!
+  arbitrator: String!
+  createdAt: BigInt!
+  released: Boolean!
+  refunded: Boolean!
+}
+
+type Poll @entity(immutable: false) {
+  id: ID!                    # pollId
+  creator: String!
+  threadId: BigInt!
+  question: String!
+  optionLabels: [String!]!
+  voterCount: BigInt!
+  state: String!             # "Open" | "Closed"
+  createdAt: BigInt!
+  closedAt: BigInt
+  votes: [VoteEvent!]! @derivedFrom(field: "poll")
+}
+
+type VoteEvent @entity(immutable: true) {
+  id: ID!                    # pollId-voterAddress
+  poll: Poll!
+  voter: String!
+  timestamp: BigInt!
+}
+
+type Invite @entity(immutable: false) {
+  id: ID!                    # inviteId
+  inviter: String!
+  invitee: String!
+  inviteLink: String!
+  createdAt: BigInt!
+  expiresAt: BigInt!
+  redeemed: Boolean!
+  cancelled: Boolean!
+}

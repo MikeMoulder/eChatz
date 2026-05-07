@@ -1,0 +1,132 @@
+specVersion: 0.0.5
+schema:
+  file: ./schema.graphql
+
+dataSources:
+
+  - kind: ethereum
+    name: IdentityRegistry
+    network: sepolia
+    source:
+      address: "0x0a7C361dE5b5f637432AfCD1FE6370BeB00Fbc06"
+      abi: IdentityRegistry
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - RegisteredUser
+      abis:
+        - name: IdentityRegistry
+          file: ./abis/IdentityRegistry.json
+      eventHandlers:
+        - event: UserRegistered(indexed address,uint256)
+          handler: handleUserRegistered
+      file: ./src/mapping.ts
+
+  - kind: ethereum
+    name: InviteRegistry
+    network: sepolia
+    source:
+      address: "0x6275e7164B10f9aE68eBc707E44DAB89E0E2776A"
+      abi: InviteRegistry
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - Invite
+      abis:
+        - name: InviteRegistry
+          file: ./abis/InviteRegistry.json
+      eventHandlers:
+        - event: InviteCreated(indexed uint256,indexed address,indexed address,uint256)
+          handler: handleInviteCreated
+        - event: InviteRedeemed(indexed uint256,indexed address)
+          handler: handleInviteRedeemed
+        - event: InviteCancelled(indexed uint256,indexed address)
+          handler: handleInviteCancelled
+      file: ./src/mapping.ts
+
+  - kind: ethereum
+    name: MessageStore
+    network: sepolia
+    source:
+      address: "0xE46B34d8705b0F5a06ECbD0512Ae5FE1c39460C6"
+      abi: MessageStore
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - Message
+        - Thread
+      abis:
+        - name: MessageStore
+          file: ./abis/MessageStore.json
+      eventHandlers:
+        - event: MessageSent(indexed uint256,indexed uint256,indexed address,address,uint8,uint8,uint256)
+          handler: handleMessageSent
+      file: ./src/mapping.ts
+
+  - kind: ethereum
+    name: PaymentRouter
+    network: sepolia
+    source:
+      address: "0x988739002e3DF170fdd4BBf66b77B45E0028F5fC"
+      abi: PaymentRouter
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - PaymentEvent
+        - PaymentRequest
+        - EscrowEvent
+      abis:
+        - name: PaymentRouter
+          file: ./abis/PaymentRouter.json
+      eventHandlers:
+        - event: PaymentSent(indexed address,indexed address,address,uint256,uint256)
+          handler: handlePaymentSent
+        - event: RequestCreated(indexed uint256,indexed address,indexed address,address)
+          handler: handleRequestCreated
+        - event: RequestFulfilled(indexed uint256)
+          handler: handleRequestFulfilled
+        - event: EscrowCreated(indexed uint256,indexed address,indexed address,address)
+          handler: handleEscrowCreated
+        - event: EscrowReleased(indexed uint256)
+          handler: handleEscrowReleased
+        - event: EscrowRefunded(indexed uint256)
+          handler: handleEscrowRefunded
+      file: ./src/mapping.ts
+
+  - kind: ethereum
+    name: VotingModule
+    network: sepolia
+    source:
+      address: "0xf2584e480DAE439e3667bF4e7827FF040A701C46"
+      abi: VotingModule
+      startBlock: 0
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.7
+      language: wasm/assemblyscript
+      entities:
+        - Poll
+        - VoteEvent
+      abis:
+        - name: VotingModule
+          file: ./abis/VotingModule.json
+      eventHandlers:
+        - event: PollCreated(indexed uint256,indexed address,indexed uint256,string)
+          handler: handlePollCreated
+        - event: VoteCast(indexed uint256,indexed address)
+          handler: handleVoteCast
+        - event: PollClosed(indexed uint256,uint256)
+          handler: handlePollClosed
+      file: ./src/mapping.ts

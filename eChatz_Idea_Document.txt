@@ -1,0 +1,878 @@
+================================================================================
+                         eChatz — FULL PRODUCT IDEA DOCUMENT
+              On-Chain Encrypted Peer-to-Peer Messaging Powered by Zama fhEVM
+================================================================================
+
+Prepared for: Zama Developer Program Submission
+Version: 4.0  [Updated: FIX_9 public key sourcing + FIX_10 dual ciphertext for sender history]
+Date: May 04, 2026
+
+________________________________________________________________________________
+
+TABLE OF CONTENTS
+
+  1. Product Overview
+  2. Core Philosophy & Vision
+  3. Technology Stack
+  4. Feature Breakdown
+  5. Architecture Overview
+  6. Smart Contract Design
+  7. Frontend & UX Design
+  8. Feasibility Analysis
+  9. Challenges & Mitigations
+  10. Roadmap
+  11. Monetization & Sustainability
+  12. Why This Matters for Zama
+
+________________________________________________________________________________
+
+1. PRODUCT OVERVIEW
+________________________________________________________________________________
+
+eChatz is a fully on-chain, end-to-end encrypted peer-to-peer (P2P) messaging
+application built on top of Zama's fhEVM (Fully Homomorphic Encryption EVM).
+Unlike traditional encrypted messengers that rely on off-chain servers or
+centralized key management, eChatz performs encryption at the smart contract
+level using Fully Homomorphic Encryption (FHE), meaning messages are
+encrypted on-chain and can only be decrypted by the intended recipient —
+no server, no middleman, no data leak.
+
+eChatz is not just a chat app. It is a programmable, encrypted communication
+layer on the blockchain — combining the privacy guarantees of FHE with the
+financial rails of Web3. Users can message, send tokens, and interact with
+smart contract-powered "slash commands" all within a single encrypted thread.
+
+Tagline: "Message like no one is watching. Because no one can."
+
+________________________________________________________________________________
+
+2. CORE PHILOSOPHY & VISION
+________________________________________________________________________________
+
+PRIVACY AS A PRIMITIVE
+  In most Web3 apps, everything is public by default. eChatz inverts this.
+  Privacy is the default state. All messages are ciphertext on-chain. No one —
+  not validators, not indexers, not even Zama — can read your messages without
+  your private key.
+
+OWNERSHIP OF COMMUNICATION
+  Your messages are stored in a smart contract that YOU interact with. There is
+  no company that can delete your account, suspend your messages, or hand your
+  data to a third party. The blockchain is the backend.
+
+TRUST-MINIMIZED FINANCIAL MESSAGING
+  By combining messaging with on-chain payments, eChatz removes the need to
+  switch between a messaging app and a wallet. You can talk and transact in the
+  same encrypted thread.
+
+________________________________________________________________________________
+
+3. TECHNOLOGY STACK
+________________________________________________________________________________
+
+BLOCKCHAIN LAYER
+  - Network: Zama fhEVM-compatible chain (e.g., Zama's devnet, or a testnet
+    deployment such as fhEVM on Ethereum testnets like Sepolia)
+  - Smart Contracts: Solidity with Zama's fhEVM library (TFHE.sol)
+  - Encryption Primitive: TFHE (Torus Fully Homomorphic Encryption) via
+    Zama's fhEVM — messages stored as euint / ebytes ciphertext types
+
+FRONTEND
+  - Framework: Next.js (React-based for SSR + PWA support)
+  - Wallet Connection: RainbowKit / wagmi / ethers.js
+  - Encryption SDK: fhevmjs (Zama's JavaScript SDK for client-side encryption
+    and decryption request generation)
+  - Styling: Tailwind CSS + Framer Motion (for smooth animations)
+  - Identity: ENS (Ethereum Name Service) for human-readable addresses
+
+STORAGE
+  - On-chain: All encrypted message ciphertext stored directly in smart
+    contract storage (feasible for short messages; see feasibility section)
+  - Off-chain (hybrid option): IPFS / Arweave for larger message payloads,
+    with only the encrypted content hash + access control logic on-chain
+
+INFRASTRUCTURE
+  - Indexing: The Graph (subgraph for message events)
+  - Notifications: Push Protocol (Web3 native push notifications)
+  - RPC: Zama's fhEVM node or Infura/Alchemy with fhEVM support
+
+________________________________________________________________________________
+
+4. FEATURE BREAKDOWN
+________________________________________________________________________________
+
+──────────────────────────────────────────────────────────────────────────────
+4.1 CORE MESSAGING FEATURES
+──────────────────────────────────────────────────────────────────────────────
+
+[A] ENCRYPTED P2P MESSAGING
+  - Users connect their wallet and start a conversation with any Ethereum address
+  - Messages are encrypted client-side using the recipient's public key + fhEVM
+    before being sent to the smart contract
+  - The smart contract stores encrypted ciphertext (ebytes) on-chain
+  - Only the recipient can decrypt using their wallet + fhevmjs re-encryption
+  - Message history is fully on-chain, censorship-resistant and permanent
+
+[B] CONVERSATION THREADS
+  - Conversations are organized by address pair
+  - Thread ID = keccak256(addressA, addressB) for deterministic lookup
+  - Each thread has its own encrypted message array in the contract
+
+[C] MESSAGE TYPES
+  - Text messages (primary use case)
+  - Encrypted file attachment hashes (IPFS CID stored as encrypted bytes)
+  - System messages (e.g., "/send confirmation", "user joined", etc.)
+  - Reaction emojis (stored as encrypted uint8 mapped to emoji set)
+
+[D] MESSAGE STATUS
+  - Sent (tx confirmed on-chain)
+  - Delivered (recipient address has fetched the message)
+  - Read receipts (optional, user can disable for privacy)
+  - All statuses stored as encrypted booleans (ebool) on-chain
+
+[E] CONTACT LIST / ADDRESS BOOK
+  - Users can label addresses with encrypted nicknames stored on-chain
+  - Contact list is private — stored as encrypted mapping in the contract
+
+──────────────────────────────────────────────────────────────────────────────
+4.2 SLASH COMMANDS (IN-CHAT ACTIONS)
+──────────────────────────────────────────────────────────────────────────────
+
+These are typed commands inside the message input that trigger on-chain actions.
+This is the "superpower" layer of eChatz — programmable money inside a chat.
+
+[/send] — SEND TOKENS TO CHAT PARTNER
+  Usage:  /send 0.5 ETH
+          /send 100 USDC
+  - Parses the command on the frontend
+  - Calls the eChatz payment contract to transfer tokens to the recipient
+  - The transfer is confirmed in the chat thread as an encrypted system message
+  - Supports ETH and ERC-20 tokens
+  - Optional: sender can attach a note to the payment (encrypted message)
+  - Shows payment status (pending, confirmed, failed) in the thread UI
+
+[/request] — REQUEST PAYMENT FROM CHAT PARTNER
+  Usage:  /request 50 USDC "for dinner last night"
+  - Creates a payment request stored on-chain
+  - Recipient sees the request as an actionable in-chat card
+  - One-click "Pay Now" button to fulfill the request
+  - Request expires after a configurable time (e.g., 7 days)
+
+[/split] — SPLIT A BILL
+  Usage:  /split 200 USDC between @alice @bob @carol
+  - Creates a multi-party split request
+  - Each participant receives an encrypted notification in their thread with you
+  - Tracks who has paid and who hasn't (stored as encrypted array of booleans)
+
+[/escrow] — TRUSTLESS ESCROW
+  Usage:  /escrow 500 USDC "for freelance logo design" release:@alice
+  - Locks funds in an escrow smart contract
+  - Funds only release when both parties confirm via the chat interface
+  - Ideal for freelance work, OTC trades, or peer agreements
+  - Dispute mechanism: third-party arbitration address can be set at creation
+
+[/vote] — IN-CHAT ENCRYPTED VOTING
+  Usage:  /vote "Where should we eat?" [Pizza, Sushi, Burgers]
+  - Creates an encrypted on-chain vote accessible only to the thread participants
+  - Votes are cast as encrypted choices (euint) — participants cannot see each
+    other's votes until the vote closes
+  - Results revealed only after vote ends using FHE decryption
+
+[/schedule] — SCHEDULE A PAYMENT
+  Usage:  /schedule 10 USDC weekly to @bob for 3 months
+  - Creates a recurring Sablier-style stream or scheduled transfer
+  - Managed by the eChatz payment contract
+  - Can be cancelled from within the chat
+
+[/tip] — MICRO-TIP A MESSAGE
+  Usage:  /tip 0.01 ETH [message_id]
+  - Tip a specific message in the thread
+  - Great for rewarding great advice or just showing appreciation
+  - Aggregated tips visible on the message as an encrypted total
+
+[/nft] — SEND AN NFT
+  Usage:  /nft [contract_address] [tokenId]
+  - Transfers an NFT to the chat recipient via safeTransferFrom
+  - NFT display card appears in the chat thread
+
+[/verify] — PROVE ON-CHAIN CREDENTIALS
+  Usage:  /verify balance > 1 ETH
+  - Uses FHE to let a user prove a condition (e.g., they hold more than X tokens)
+    WITHOUT revealing the actual balance — a zero-knowledge-like proof via FHE
+  - Recipient sees "Verified: wallet holds > 1 ETH" without seeing exact amount
+  - Useful for trust-building in P2P deals
+
+──────────────────────────────────────────────────────────────────────────────
+4.3 IDENTITY & PRIVACY FEATURES
+──────────────────────────────────────────────────────────────────────────────
+
+[A] ENS INTEGRATION
+  - Users can chat with "alice.eth" instead of raw addresses
+  - ENS reverse resolution for display names in the UI
+
+[B] ENCRYPTED USER PROFILE
+  - Username, bio, and avatar stored as encrypted fields on-chain
+  - Users choose what to make "public" vs "private" — all toggles stored
+    as encrypted booleans managed by the contract
+
+[C] PRIVACY MODES
+  - Ghost Mode: Do not reveal online/read status to anyone
+  - Incognito Thread: A thread that auto-deletes (marks as inactive) after
+    a set number of messages or time period
+  - Burn After Read: Individual messages that self-destruct (marked as
+    inaccessible after the recipient reads them)
+
+[D] BLOCK & SPAM PROTECTION
+  - Users can block addresses — stored as an encrypted blocklist in the contract
+  - Anti-spam: require a small ETH deposit (e.g., 0.001 ETH) for first-contact
+    messages from unknown addresses; refunded once accepted
+  - Contact requests must be accepted before full messaging begins
+
+[E] MULTI-DEVICE ACCESS
+  - Users can register multiple wallet addresses as "linked devices"
+  - Each device can decrypt messages using its own key + re-encryption via fhEVM
+  - Device management is on-chain and encrypted
+
+──────────────────────────────────────────────────────────────────────────────
+4.4 GROUP CHATS (v2 Feature)
+──────────────────────────────────────────────────────────────────────────────
+
+  - Create encrypted group threads with up to N participants (gas-dependent)
+  - Group admin can add/remove members; changes stored on-chain
+  - Group payments: /send, /split, /vote all work in group context
+  - Each new member receives re-encrypted message keys via fhEVM
+  - Group treasury: optional shared wallet for group expenses
+
+──────────────────────────────────────────────────────────────────────────────
+4.5 NOTIFICATIONS
+──────────────────────────────────────────────────────────────────────────────
+
+  - Push Protocol integration for Web3-native notifications
+  - Notify when: new message arrives, payment request received, escrow updated,
+    vote cast, /split settled
+  - Notification content is encrypted end-to-end via Push Protocol channels
+  - Users opt-in to notifications by subscribing their wallet to eChatz channel
+
+──────────────────────────────────────────────────────────────────────────────
+4.6 DEVELOPER / POWER USER FEATURES
+──────────────────────────────────────────────────────────────────────────────
+
+  - Open API: Developers can build bots/agents that interact with eChatz threads
+  - Bot Framework: Deploy a smart contract bot address; users /add it to threads
+  - Webhooks: Listen to your eChatz thread events via The Graph webhooks
+  - SDK: JavaScript/TypeScript SDK for building on top of eChatz
+
+________________________________________________________________________________
+
+5. ARCHITECTURE OVERVIEW
+________________________________________________________________________________
+
+  [User A Wallet]                              [User B Wallet]
+        |                                             |
+  [fhevmjs SDK]                              [fhevmjs SDK]
+  (encrypt msg with                          (decrypt msg with
+   B's public key)                            own private key
+        |                                     via re-encryption)
+        |                                             ^
+        v                                             |
+  [eChatz Frontend (Next.js)]                         |
+        |                                             |
+        | ← Step 0: isRegistered() check (free)       |
+        |   If false → show invite modal              |
+        |   If true  → proceed to encrypt + send      |
+        v                                             |
+  [eChatz Smart Contracts on fhEVM Chain]  <<---------+
+        |
+        |--- IdentityRegistry.sol (user registration, profiles, contacts, blocklists)
+        |--- InviteRegistry.sol   (invite creation, tracking, redemption)
+        |--- MessageStore.sol     (stores encrypted messages as ebytes)
+        |--- PaymentRouter.sol    (handles /send, /request, /escrow, /split)
+        |--- VotingModule.sol     (encrypted in-chat votes)
+        |--- ScheduleModule.sol   (recurring payments)
+        |
+  [The Graph Subgraph]  <--- indexes MessageSent, InviteCreated, UserRegistered events
+        |
+  [Frontend queries subgraph for message list, decrypts client-side]
+
+________________________________________________________________________________
+
+6. SMART CONTRACT DESIGN
+________________________________________________________________________________
+
+KEY CONTRACTS
+
+  IdentityRegistry.sol
+  ────────────────────
+  - registerUser(ebytes encryptedUsername, ebytes encryptedBio, bytes publicKey) external
+    → sets registered[msg.sender] = true (plaintext public bool)
+    → [FIX_9] stores caller's 65-byte ECDSA public key in publicKeys[msg.sender]
+    → verifies submitted publicKey derives to msg.sender — prevents key spoofing
+    → auto-calls InviteRegistry.redeemInvite() if a pending invite exists
+  - isRegistered(address user) external view returns (bool)
+    → CRITICAL: this is the gate that all of eChatz depends on
+    → plaintext bool — intentionally not encrypted for cheap readability
+  - getPublicKey(address user) external view returns (bytes memory)
+    → [FIX_9] returns the stored 65-byte public key for any registered user
+    → called by frontend in SUBSTEP_0B before encrypting any message
+    → guaranteed to return a valid key for any registered address
+  - addContact(address addr, ebytes encryptedNickname) external
+  - blockAddress(address addr) external
+  - isBlocked(address addr) external view returns (ebool)
+  - linkDevice(address deviceAddr) external
+
+  InviteRegistry.sol  [Solution A]
+  ─────────────────────────────────
+  - createInvite(address invitee) external returns (bytes32 inviteId, string inviteLink)
+    → called when sender tries to message an unregistered address
+    → generates a shareable link: https://echatz.app/join?ref={token}&chain={chainId}
+    → stores invite record on-chain
+  - hasPendingInvite(address invitee) external view returns (bool)
+  - redeemInvite(address invitee) external
+    → called automatically by IdentityRegistry when invitee registers
+    → marks invite as redeemed; triggers Push notification to inviter
+  - cancelInvite(bytes32 inviteId) external
+    → inviter can cancel an outstanding invite
+
+  MessageStore.sol
+  ────────────────
+  - sendMessage(address recipient, ebytes recipientCiphertext, ebytes senderCiphertext) external
+    → [FIX_10] accepts TWO ciphertexts — one for recipient, one for sender
+    → REQUIRE: isRegistered(msg.sender) — sender gate [FIX_1]
+    → REQUIRE: isRegistered(recipient) — recipient gate [Solution A]
+    → REQUIRE: both ciphertext fields non-empty
+    → stores EncryptedMessage with both ciphertext fields
+  - getMessages(address peer) external view returns (EncryptedMessage[])
+  - markRead(bytes32 messageId) external
+  - burnMessage(bytes32 messageId) external
+    → [FIX_10] zeroes BOTH recipientCiphertext and senderCiphertext fields
+  - Storage: mapping(bytes32 threadId => EncryptedMessage[]) private threads
+
+  PaymentRouter.sol
+  ─────────────────
+  - sendETH(address recipient, string encryptedNote) external payable
+    → [FIX_1/FIX_2] REQUIRE isRegistered(sender) AND isRegistered(recipient)
+  - sendERC20(address token, address recipient, euint64 amount) external
+    → [FIX_1/FIX_2] same registration gates
+  - createRequest(address from, euint64 amount, string note) external
+  - fulfillRequest(bytes32 requestId) external payable
+  - createEscrow(...) — [FIX_5] REQUIRE isRegistered(arbitrator)
+  - schedulePayment(address recipient, euint64 amount, uint interval) external
+
+  VotingModule.sol
+  ────────────────
+  - createPoll(bytes32 threadId, string question, string[] options) external
+  - castVote(bytes32 pollId, euint8 choiceIndex) external
+  - closePoll(bytes32 pollId) external
+  - getPollResult(bytes32 pollId) external view returns (uint[])
+
+FHE TYPES USED
+  - ebytes  → encrypted message content (now two per message: recipient + sender copy)
+  - euint64 → encrypted token amounts (for /verify, /send with hidden amounts)
+  - ebool   → encrypted read status, block flags, device flags
+  - euint8  → encrypted vote choices, reaction types
+  - bytes   → public key storage (plain — intentionally public, not FHE encrypted)
+
+________________________________________________________________________________
+
+7. FRONTEND & UX DESIGN
+________________________________________________________________________________
+
+SCREENS
+
+  [1] Landing Page
+      - Connect Wallet button
+      - Short explainer: "The first fully on-chain encrypted messenger"
+      - Live stats: messages sent today, active users (from subgraph)
+      - /join?ref={token} route: shows personalised invite page if link token present
+        → "You've been invited by alice.eth to join eChatz"
+        → [Connect Wallet & Join] → triggers registerUser() → invite auto-redeemed
+
+  [2] Inbox
+      - List of all active threads (contact address + ENS name)
+      - Last message preview: shows "[Encrypted]" until decrypted client-side
+      - Unread count badge (stored as encrypted count, revealed locally)
+      - Search contacts by ENS or address
+
+  [3] Chat Thread
+      - Message bubbles: left = received, right = sent
+      - Encrypted messages show a lock icon until decrypted
+      - Slash command autocomplete dropdown (type "/" to trigger)
+      - Payment cards rendered inline (for /send, /request, /escrow)
+      - Vote cards rendered inline (for /vote)
+      - Attach file button (encrypts file, uploads to IPFS, stores hash on-chain)
+      - Message options: Tip, React, Burn After Read, Quote Reply
+      - If address is unregistered: message input is DISABLED, replaced by:
+          "This address hasn't joined eChatz yet."
+          [Send Invite →] button → triggers invite modal
+
+  [4] Invite Modal  [Solution A]
+      - Triggered when user tries to open a thread with an unregistered address
+      - Shows: address / ENS name of target
+      - [Send Invite] button → calls InviteRegistry.createInvite()
+      - On success: displays generated invite link with [Copy] and [Share] buttons
+      - Shows invite status: Pending / Accepted / Expired / Cancelled
+      - Inviter gets a Push Protocol notification when invite is accepted
+
+  [5] Profile Page
+      - Edit encrypted profile fields
+      - View linked devices
+      - Manage blocked addresses
+      - Notification settings
+      - View sent invites and their statuses
+
+  [6] Payments Dashboard
+      - Overview of all /send, /request, /escrow activity
+      - Pending requests with Pay Now buttons
+      - Payment history (all encrypted, decrypted client-side)
+
+UX PHILOSOPHY
+  - Mobile-first responsive design (PWA for mobile install)
+  - Dark mode default (Web3 aesthetic)
+  - Optimistic UI: show message as "sending" while tx confirms
+  - Gas estimates shown before any action
+  - Transaction confirmation toasts with etherscan links
+
+________________________________________________________________________________
+
+8. FEASIBILITY ANALYSIS
+________________________________________________________________________________
+
+──────────────────────────────────────────────────────────────────────────────
+8.1 WHAT IS HIGHLY FEASIBLE
+──────────────────────────────────────────────────────────────────────────────
+
+[FULLY FEASIBLE] Encrypted P2P Messaging
+  - Zama's fhEVM fully supports ebytes storage in smart contracts
+  - fhevmjs provides client-side encryption/decryption APIs out of the box
+  - Short text messages (< 512 bytes) are well within what fhEVM handles today
+  - Re-encryption (letting the recipient decrypt with their key) is a core
+    fhEVM feature — this is literally what it's built for
+  - VERDICT: This is the perfect showcase use case for fhEVM. Core feasible.
+
+[FULLY FEASIBLE] /send — Token Transfers
+  - Standard ERC-20 / ETH transfer logic + a chat event — trivial to implement
+  - Attaching an encrypted note to a transfer is straightforward with ebytes
+  - VERDICT: Fully feasible, widely done in Web3, eChatz adds FHE privacy layer
+
+[FULLY FEASIBLE] /request — Payment Requests
+  - Simple smart contract state (requestId → amount, status, parties)
+  - The FHE layer makes the requested amount private if desired
+  - VERDICT: Fully feasible
+
+[FULLY FEASIBLE] Encrypted Profile & Contact List
+  - Storing encrypted mappings in Solidity with TFHE types is supported
+  - VERDICT: Fully feasible, moderate gas cost
+
+[FULLY FEASIBLE] ENS Integration
+  - ENS is a mature, well-documented standard
+  - wagmi hooks + ethers.js handle ENS resolution trivially
+  - VERDICT: Fully feasible, 1-2 days of work
+
+[FULLY FEASIBLE] The Graph Indexing
+  - Index MessageSent events (ciphertext is public — only content is hidden)
+  - Thread history, unread counts, contact lists can all be indexed
+  - VERDICT: Fully feasible
+
+[MOSTLY FEASIBLE] /escrow
+  - Escrow logic is well-established in Solidity
+  - Adding FHE to hide escrow amounts is feasible with euint64
+  - Dispute resolution adds complexity but is achievable
+  - VERDICT: Mostly feasible; dispute mechanism needs careful design
+
+[MOSTLY FEASIBLE] /vote — Encrypted Voting
+  - FHE encrypted voting is one of Zama's documented use cases
+  - Works cleanly for small polls within a thread
+  - Gas cost scales with number of options and voters
+  - VERDICT: Mostly feasible for small-scale polls
+
+──────────────────────────────────────────────────────────────────────────────
+8.2 MODERATELY CHALLENGING
+──────────────────────────────────────────────────────────────────────────────
+
+[CHALLENGING] On-Chain Storage of Large Messages
+  - Storing long messages as ebytes on-chain is expensive (gas)
+  - A 1 KB message encrypted as ciphertext may cost significant gas
+  - MITIGATION: Cap on-chain messages at ~280 characters (like a tweet)
+    For longer content, encrypt off-chain, store on IPFS, put hash on-chain
+  - Hybrid approach (IPFS + on-chain hash) is the practical path
+
+[CHALLENGING] /split — Multi-Party Payments
+  - Multi-party coordination on-chain adds complexity
+  - Gas costs multiply with number of participants
+  - MITIGATION: Limit to 5 participants in v1; use a simple state machine
+
+[CHALLENGING] Group Chats
+  - Key management for groups is the hard part — each new member needs
+    re-encrypted access to the thread
+  - fhEVM re-encryption scales but has limits on number of keys
+  - MITIGATION: Start with 1:1 only in v1, add groups in v2 with careful
+    access control design
+
+[CHALLENGING] /schedule — Recurring Payments
+  - EVM has no native cron/scheduler
+  - MITIGATION: Use Chainlink Automation (Keepers) or Gelato Network
+    to trigger scheduled payment functions on-chain
+
+[CHALLENGING] Burn After Read / Self-Destructing Messages
+  - The blockchain is immutable — you cannot truly "delete" a message
+  - MITIGATION: Instead of deletion, mark the message as "burned" in contract
+    state, refuse to serve decryption to any party after the flag is set.
+    The ciphertext remains on-chain but becomes practically inaccessible.
+
+──────────────────────────────────────────────────────────────────────────────
+8.3 HIGH DIFFICULTY / FUTURE WORK
+──────────────────────────────────────────────────────────────────────────────
+
+[HIGH DIFFICULTY] Real-Time Message Delivery
+  - Blockchains confirm in seconds to minutes, not milliseconds
+  - eChatz messages are confirmed when the tx is included in a block
+  - MITIGATION: Show optimistic UI (display message immediately), confirm
+    on-chain in background. Use websocket listeners on The Graph for instant
+    updates when tx confirms. On fast L2s this is 1-3 seconds — acceptable.
+
+[HIGH DIFFICULTY] /verify — FHE Proofs of Balance
+  - Proving encrypted balance > threshold without revealing balance is
+    theoretically supported by FHE (compute on ciphertext)
+  - Requires careful contract design and Zama TFHE.gt() comparisons
+  - MITIGATION: This is a premium v2 feature; start with simpler proofs
+
+[HIGH DIFFICULTY] Full Gas Optimization
+  - FHE operations on-chain are computationally heavier than normal EVM ops
+  - Each encrypted message storage and retrieval costs more gas than plaintext
+  - MITIGATION: Deploy on an L2 or Zama's dedicated fhEVM chain where gas
+    is lower; batch operations where possible; use off-chain hybrid for content
+
+________________________________________________________________________________
+
+9. CHALLENGES & MITIGATIONS
+________________________________________________________________________________
+
+CHALLENGE 1: GAS COSTS
+  Problem:  FHE operations and ebytes storage are more expensive than standard
+            Solidity. A message-heavy app could get expensive for users.
+  Mitigation:
+    - Deploy on L2 (lower base fees)
+    - Hybrid storage: IPFS for content, hash on-chain
+    - Gas sponsorship (meta-transactions / ERC-4337 account abstraction)
+    - Session keys so users don't sign every message individually
+
+CHALLENGE 2: UX COMPLEXITY
+  Problem:  Encryption, wallet signing, and tx confirmation are unfamiliar
+            to mainstream users; could feel slow vs WhatsApp/Telegram.
+  Mitigation:
+    - Abstract complexity: users should not see "sign this tx to send message"
+    - Use session keys (ERC-4337) for batched, one-click message sending
+    - Show friendly loading states and optimistic UI
+    - Onboard via email/social login (Privy, Dynamic) for Web2 users
+
+CHALLENGE 3: KEY MANAGEMENT
+  Problem:  If a user loses their wallet, they lose access to all messages.
+  Mitigation:
+    - Social recovery wallet support (Safe, Argent)
+    - Warn users clearly about this tradeoff
+    - Optional: backup encrypted keys to user's own cloud storage
+
+CHALLENGE 4: fhEVM MATURITY
+  Problem:  Zama's fhEVM is still evolving; some features may change.
+  Mitigation:
+    - Build on Zama's latest stable release
+    - Stay close to Zama's developer community and Discord
+    - Design contracts to be upgradeable (UUPS proxy pattern)
+
+CHALLENGE 5: SCALABILITY
+  Problem:  On-chain message storage grows indefinitely; queries get slower.
+  Mitigation:
+    - Paginate message retrieval (fetch last N messages)
+    - Archive old threads to IPFS
+    - The Graph subgraph handles indexing efficiently
+
+CHALLENGE 6: MESSAGING AN UNREGISTERED RECIPIENT  [Solution A]
+  Problem:  A user tries to message an address that has never registered on
+            eChatz. FHE encryption requires the recipient to have an fhEVM
+            public key context — unregistered addresses have none.
+  Mitigation:
+    - Frontend preflight: isRegistered(recipient) before any encryption.
+      If false, block send and show invite modal. Zero gas spent.
+    - Contract backstop: sendMessage() REQUIRE(isRegistered(recipient))
+      reverts if client check is bypassed.
+    - InviteRegistry.sol generates shareable invite links stored on-chain.
+      Invite is auto-redeemed when invitee registers. Inviter is notified.
+
+CHALLENGE 7: UNREGISTERED SENDER  [FIX_1]
+  Problem:  The registration gate was only checking the recipient, not the sender.
+            An unregistered sender has no fhEVM key context — they cannot produce
+            valid ciphertext or decrypt anything. The app would appear to work but
+            produce invalid encrypted output silently.
+  Mitigation:
+    - At app boot (wallet connect): check isRegistered(sender). If false, block
+      the entire messaging UI and redirect to the registration onboarding flow.
+      No threads, no compose, no payments — nothing until registered.
+    - All contracts (MessageStore, PaymentRouter) add REQUIRE(isRegistered(sender))
+      as their first check — hard contract-level backstop for any direct calls.
+
+CHALLENGE 8: SLASH COMMANDS BYPASS THE REGISTRATION GATE  [FIX_2]
+  Problem:  PaymentRouter functions (/send, /request, /escrow, /split) transfer
+            real funds directly — they do not go through MessageStore. So even
+            after adding the registration gate to sendMessage(), a user could type
+            "/send 0.5 ETH" to an unregistered address and the ETH transfer would
+            succeed. The system message log would then revert, leaving the payment
+            with no chat record — or worse, the whole tx partially executes.
+  Mitigation:
+    - Every PaymentRouter function now has REQUIRE(isRegistered(sender)) and
+      REQUIRE(isRegistered(recipient)) as its first two checks. If either fails,
+      the entire transaction reverts atomically — funds never move.
+    - The frontend slash command parser also runs the isRegistered() preflight
+      before calling any PaymentRouter function.
+
+CHALLENGE 9: IPFS CONTENT DISAPPEARING  [FIX_3]
+  Problem:  Messages larger than 512 bytes are stored on IPFS, with only a hash
+            stored on-chain. IPFS has no persistence guarantee — if the pinning
+            service drops the content, the on-chain pointer becomes a permanent
+            broken link. The message bubble renders but the content never loads.
+            No error is shown — the user just waits forever.
+  Mitigation:
+    - Dual-pin every upload: Pinata (primary) AND web3.storage (secondary).
+      Both independent services must fail simultaneously for content to be lost.
+    - Re-pin silently in the background on every successful fetch.
+    - Define a clear content-missing error state: 10 second timeout + 3 retries,
+      then show "This message could not be retrieved" in the bubble — never hang.
+
+CHALLENGE 10: ENS NAME STALENESS  [FIX_4]
+  Problem:  ENS names are transferable. If a user searches for "alice.eth" and
+            later sends a message, alice.eth may have been sold to a different
+            wallet in between. The message goes to the new owner — the wrong person.
+            The spec was using ENS names for routing, which is fundamentally unsafe.
+  Mitigation:
+    - ENS resolution now happens at the moment of send — not at search time.
+    - The raw resolved Ethereum address (not the ENS name) is what gets passed
+      to all contracts. ENS names are display-only in the UI.
+    - The resolved address is shown to the sender for confirmation before send:
+      "Sending to: alice.eth → 0xABCD...1234. Confirm?"
+
+CHALLENGE 11: UNREGISTERED ESCROW ARBITRATOR  [FIX_5]
+  Problem:  The /escrow command lets the sender name an arbitrator to resolve
+            disputes. The spec had no check on whether the arbitrator was
+            registered on eChatz. An unregistered arbitrator cannot see the
+            encrypted thread, cannot read the escrow terms, and has no way to
+            participate. The escrow becomes permanently locked with no resolution.
+  Mitigation:
+    - createEscrow() now requires REQUIRE(isRegistered(arbitrator)) before
+      accepting the arbitrator address. If the arbitrator is not on eChatz,
+      the escrow is rejected at creation — no funds are ever locked.
+    - Additional guard: arbitrator cannot be the depositor or beneficiary.
+
+CHALLENGE 12: SESSION KEY EXPIRY MID-CONVERSATION  [FIX_6]
+  Problem:  ERC-4337 session keys have a finite lifetime (default 4 hours).
+            When a session expires, the next message submission is silently
+            rejected by the EntryPoint contract. The user hits send and nothing
+            happens — no error, no feedback. The message appears to disappear.
+  Mitigation:
+    - Proactive: show a non-blocking "Session expiring soon" banner 5 minutes
+      before expiry with a [Renew Session] button — one wallet signature.
+    - Reactive: catch EntryPoint error codes AA24/AA22 (session expired/invalid),
+      block the failed message from showing as sent, display a renewal prompt,
+      and automatically retry the failed message after renewal completes.
+
+CHALLENGE 13: CHAIN REORG INVALIDATING AN OPTIMISTIC MESSAGE  [FIX_7]
+  Problem:  The optimistic UI shows messages as delivered the moment the tx is
+            submitted, before it's confirmed on-chain. If a chain reorganisation
+            orphans the block containing the transaction, the message is gone
+            from the chain — but still shows as delivered in the UI. The user
+            has no idea their message was lost.
+  Mitigation:
+    - Every sent message tracks a state: OPTIMISTIC → PENDING → CONFIRMED / FAILED.
+    - Messages are only shown as "delivered" after N block confirmations
+      (3 on L2, 12 on mainnet). Pending messages show a distinct indicator.
+    - The frontend polls the tx status and detects if the block number changes
+      (reorg signal) or if the tx disappears after 3 minutes (timeout).
+    - On FAILED: show "Message may not have been delivered" with a [Resend] button.
+
+CHALLENGE 14: INVITE SENT TO WRONG CHAIN  [FIX_8]
+  Problem:  An invite is created on chain X. The invitee discovers eChatz
+            independently and registers on chain Y. The invite redemption
+            never fires on chain X — inviter is never notified, invite stays
+            as PENDING forever.
+  Mitigation:
+    - Invite links now include the chainId parameter:
+      https://echatz.app/join?ref={token}&chain={chainId}
+    - The frontend reads chainId from the link and prompts the wallet to
+      switch to the correct network before proceeding with registration.
+    - Each deployment is isolated and chain-scoped. This is documented clearly
+      in onboarding copy so users understand the boundary.
+
+CHALLENGE 15: NO DEFINED SOURCE FOR RECIPIENT'S PUBLIC KEY  [FIX_9]
+  Problem:  Encrypting a message for someone requires their raw public key.
+            Ethereum addresses are derived by hashing the public key — the key
+            itself is hidden inside the address and only becomes publicly known
+            when that address signs its first transaction. The spec previously
+            had no defined place to get this key from. SUBSTEP_0B said "fetch
+            recipient's public key" but never specified where from. In practice,
+            if the key wasn't available, encryption would fail silently or with
+            a confusing error.
+  Mitigation:
+    - registerUser() now requires the caller to explicitly submit their own
+      65-byte uncompressed ECDSA public key as part of registration.
+    - The contract verifies the submitted key mathematically derives to the
+      caller's address — this proves ownership and prevents spoofing.
+    - The verified key is stored in IdentityRegistry.publicKeys[address].
+    - A new getPublicKey(address) view function lets anyone fetch a registered
+      user's public key before encrypting a message to them.
+    - Because this key is required to register, it is guaranteed to exist for
+      every registered address. The spec is now watertight end-to-end.
+
+CHALLENGE 16: SENDER CANNOT READ THEIR OWN SENT MESSAGES  [FIX_10]
+  Problem:  Each message is encrypted using only the recipient's public key.
+            That means only the recipient's private key can decrypt it. The
+            sender — who wrote the message — has no key that opens it. If they
+            scroll back through their conversation history, their own sent messages
+            appear as locked, unreadable ciphertext. This is not an edge case —
+            it affects 100% of sent messages, 100% of the time.
+  Mitigation:
+    - Every message is now encrypted TWICE — the same plaintext produces two
+      independent ciphertexts: one encrypted under the recipient's public key,
+      one encrypted under the sender's own public key.
+    - Both ciphertexts are stored on-chain in the same EncryptedMessage record
+      as separate fields: recipientCiphertext and senderCiphertext.
+    - The frontend reads the viewer's wallet address and picks the right field:
+        If you are the sender → decrypt senderCiphertext
+        If you are the recipient → decrypt recipientCiphertext
+    - The user never sees any of this — it happens invisibly, exactly like
+      Signal or WhatsApp handle it behind the scenes.
+    - Gas cost for on-chain content storage roughly doubles. This is the
+      unavoidable price of sender history. It is mitigated by the IPFS hybrid
+      routing (messages > 512 bytes go to IPFS, not on-chain).
+    - burnMessage() now zeroes both ciphertext fields when a message is burned.
+
+________________________________________________________________________________
+
+10. ROADMAP
+________________________________________________________________________________
+
+PHASE 1 — MVP (Month 1-2)  "The Core"
+  - IdentityRegistry.sol with public key storage + verification [FIX_9]
+  - IdentityRegistry.sol with sender + recipient registration gates [FIX_1]
+  - InviteRegistry.sol with invite link generation, chainId encoding [FIX_8]
+  - ENS resolution at send time, confirm before encrypt [FIX_4]
+  - Dual ciphertext encryption per message [FIX_10]
+  - Reorg detection state machine + resend prompt [FIX_7]
+  - Encrypted P2P messaging (text only, < 280 chars)
+  - Wallet connect (MetaMask, WalletConnect)
+  - Session key setup with expiry handling + renewal UX [FIX_6]
+  - /send ETH with registration gate [FIX_2]
+  - IPFS dual-pinning + content-missing error handler [FIX_3]
+  - Basic inbox + thread UI, invite modal for unregistered addresses
+  - Deploy on Zama fhEVM devnet / testnet
+
+PHASE 2 — Payments (Month 3)  "The Money Layer"
+  - /request — payment requests with registration gate [FIX_2]
+  - /escrow — escrow with registered arbitrator check [FIX_5]
+  - /split — multi-party with per-participant gate [FIX_2]
+  - ERC-20 support for /send
+  - Payments dashboard
+  - Push Protocol notifications
+
+PHASE 3 — Privacy Features (Month 4)  "Privacy++"
+  - Encrypted profiles & contact list
+  - Block & spam protection (deposit-for-first-contact)
+  - Ghost Mode, Burn After Read
+  - File attachments (encrypted IPFS)
+  - Reactions and tips
+
+PHASE 4 — Advanced Commands (Month 5-6)  "Power User"
+  - /vote — encrypted in-chat polls
+  - /schedule — recurring payments (Gelato integration)
+  - /verify — FHE balance proofs
+  - /nft — NFT transfers in chat
+
+PHASE 5 — Scale (Month 7+)  "Growth"
+  - Group chats (up to 10 participants)
+  - Mobile PWA polish
+  - Developer SDK & bot framework
+  - Mainnet deployment
+
+________________________________________________________________________________
+
+11. MONETIZATION & SUSTAINABILITY
+________________________________________________________________________________
+
+  [A] PROTOCOL FEE ON PAYMENTS
+      - Take 0.1% - 0.5% on /send, /request, /escrow transactions
+      - This is the primary revenue stream
+      - Transparent, on-chain fee structure
+
+  [B] PREMIUM SUBSCRIPTIONS (eChatz Pro)
+      - Encrypted file attachments up to 100 MB
+      - Larger group chats (up to 50 members)
+      - Extended message history
+      - Priority support
+      - Paid in USDC or ETH to the protocol treasury
+
+  [C] ECHATZ TOKEN (Future)
+      - Governance token for protocol decisions
+      - Stake to earn fee revenue share
+      - Used for spam deposits (first-contact anti-spam mechanism)
+
+  [D] DEVELOPER ECOSYSTEM
+      - Charge for commercial API access / bot framework usage
+      - Grant program (funded by treasury) for builders building on eChatz
+
+________________________________________________________________________________
+
+12. WHY THIS MATTERS FOR ZAMA
+________________________________________________________________________________
+
+eChatz is an ideal Zama Developer Program project for several reasons:
+
+  1. KILLER USE CASE FOR FHE
+     Messaging is one of the most intuitive use cases for encryption.
+     Everyone understands "I don't want my messages read by strangers."
+     eChatz makes FHE tangible and relatable to mainstream audiences.
+
+  2. SHOWCASES fhEVM CAPABILITIES
+     The project will demonstrate:
+       - ebytes storage for encrypted message content
+       - euint operations for private payment amounts
+       - ebool for private status flags
+       - Re-encryption for recipient key management
+       - TFHE.gt() for the /verify balance proof feature
+     This is effectively a comprehensive demo of Zama's toolbox.
+
+  3. NOVEL COMBINATION
+     No one has built a full-featured, FHE-powered messaging + payments app.
+     This is genuinely new territory — not just a tutorial or toy app.
+
+  4. REAL USERS, REAL DEMAND
+     Privacy-preserving communication is a genuine market need.
+     eChatz targets Web3 natives (DeFi traders, DAO members, NFT creators)
+     who regularly share sensitive deal information over Telegram (not ideal).
+
+  5. TECHNICAL DEPTH
+     The combination of FHE encryption, slash command payment logic,
+     smart contract architecture, and frontend UX provides substantial
+     technical depth appropriate for a developer program showcase.
+
+  6. COMMUNITY IMPACT
+     An open-source eChatz would give the broader Web3 community a
+     ready-made private communication layer they can fork and extend —
+     growing the fhEVM ecosystem organically.
+
+________________________________________________________________________________
+
+SUMMARY VERDICT
+________________________________________________________________________________
+
+eChatz is a bold, technically ambitious, and feasible project for the Zama
+Developer Program. The core — encrypted P2P messaging with /send — can be
+built in 4-6 weeks on fhEVM. Advanced features like /vote, /verify, and group
+chats provide a credible v2 roadmap that keeps the project interesting long-term.
+
+The main challenges (gas costs, UX complexity, key management) all have
+well-established mitigations in the Web3 ecosystem. None are blockers for
+a developer program demo.
+
+eChatz has the potential to become the "Signal of Web3" — and it could only
+be built on Zama's fhEVM.
+
+================================================================================
+                               END OF DOCUMENT
+================================================================================

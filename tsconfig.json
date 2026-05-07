@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "lib": ["ES2022", "dom"],
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "paths": {}
+  },
+  "include": ["hardhat.config.ts", "scripts/**/*", "test/**/*", "typechain-types/**/*"],
+  "exclude": ["node_modules", "dist", "frontend", "artifacts"]
+}

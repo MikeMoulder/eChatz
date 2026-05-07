@@ -1,0 +1,302 @@
+"use client";
+
+import { useState, useRef, useMemo, useEffect } from "react";
+import { parseSlashCommand, isSlashCommand } from "@/lib/slash-commands";
+import {
+  CoinsIcon,
+  InviteIcon,
+  SendIcon,
+  ZapIcon,
+} from "./Icons";
+
+interface Props {
+  recipient: string;
+  onSend: (text: string) => Promise<void>;
+}
+
+interface CommandDef {
+  cmd: string;
+  template: string;
+  hint: string;
+  icon: React.ReactNode;
+}
+
+const COMMANDS: CommandDef[] = [
+  {
+    cmd: "/send",
+    template: "/send 0.01 ETH",
+    hint: "Send ETH or token to this recipient  ·  add 'to <addr>' for another address",
+    icon: <CoinsIcon size={13} />,
+  },
+  {
+    cmd: "/request",
+    template: "/request 0.01 ETH",
+    hint: "Request a confidential payment from this recipient  ·  add 'from <addr>' for another",
+    icon: <CoinsIcon size={13} />,
+  },
+  {
+    cmd: "/invite",
+    template: "/invite ",
+    hint: "Send an eChatz invite link to an address",
+    icon: <InviteIcon size={13} />,
+  },
+];
+
+const ON_CHAIN_BYTE_LIMIT = 32;
+
+export function MessageInput({ recipient, onSend }: Props) {
+  const [value, setValue] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [paletteIndex, setPaletteIndex] = useState(0);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const showPalette = value.startsWith("/") && (value === "/" || value.indexOf(" ") === -1);
+
+  const matches = useMemo(() => {
+    if (!showPalette) return [];
+    const q = value.toLowerCase();
+    return COMMANDS.filter((c) => c.cmd.startsWith(q));
+  }, [value, showPalette]);
+
+  useEffect(() => {
+    if (paletteIndex >= matches.length) setPaletteIndex(0);
+  }, [matches, paletteIndex]);
+
+  const isCommand = isSlashCommand(value);
+  const parsed = isCommand ? parseSlashCommand(value) : null;
+
+  const byteLength = new TextEncoder().encode(value).length;
+  const overInline = byteLength > ON_CHAIN_BYTE_LIMIT;
+
+  function applyCommand(cmd: CommandDef) {
+    setValue(cmd.template);
+    setPaletteIndex(0);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(cmd.template.length, cmd.template.length);
+      autoResize(ta);
+    });
+  }
+
+  function autoResize(el: HTMLTextAreaElement) {
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }
+
+  async function handleSubmit(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!value.trim() || sending) return;
+    setError(null);
+    setSending(true);
+    try {
+      await onSend(value.trim());
+      setValue("");
+      if (textareaRef.current) textareaRef.current.style.height = "auto";
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (showPalette && matches.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setPaletteIndex((i) => (i + 1) % matches.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setPaletteIndex((i) => (i - 1 + matches.length) % matches.length);
+        return;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+        e.preventDefault();
+        applyCommand(matches[paletteIndex]);
+        return;
+      }
+    }
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  }
+
+  function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    setValue(e.target.value);
+    autoResize(e.target);
+  }
+
+  return (
+    <div className="relative">
+      {/* Slash command palette */}
+      {showPalette && matches.length > 0 && (
+        <div className="absolute bottom-full left-0 right-0 mb-2 surface-2 animate-scale-in">
+          <div className="flex items-center justify-between border-b border-line px-3 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-3">
+            <span>slash · {matches.length} match</span>
+            <span>↑↓ navigate · tab insert</span>
+          </div>
+          <ul className="max-h-72 overflow-y-auto">
+            {matches.map((c, i) => {
+              const active = i === paletteIndex;
+              return (
+                <li key={c.cmd}>
+                  <button
+                    type="button"
+                    onClick={() => applyCommand(c)}
+                    onMouseEnter={() => setPaletteIndex(i)}
+                    className={`flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors ${
+                      active ? "bg-bg-3" : "hover:bg-bg-2"
+                    }`}
+                  >
+                    <span
+                      className={`mt-0.5 grid h-7 w-7 shrink-0 place-items-center border ${
+                        active
+                          ? "bg-accent text-accent-ink border-accent"
+                          : "bg-bg-2 text-ink-2 border-line"
+                      }`}
+                    >
+                      {c.icon}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-mono text-[13px] text-ink-1">{c.cmd}</div>
+                      <div className="truncate text-[11.5px] text-ink-3">{c.hint}</div>
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* Parsed command preview */}
+      {parsed && parsed.type !== "unknown" && !showPalette && <CommandPreview parsed={parsed} />}
+
+      {error && (
+        <div className="mb-2 border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger animate-fade-in">
+          {error}
+        </div>
+      )}
+
+      <form
+        onSubmit={handleSubmit}
+        className="flex items-end gap-px bg-line"
+      >
+        <div className="flex-1 bg-bg-2">
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            placeholder={`Send an encrypted message  to ${shortRecipient(recipient)} · use / for commands`}
+            rows={1}
+            className="w-full resize-none bg-transparent px-3.5 py-3 text-[14px] leading-snug text-ink-1 placeholder:text-ink-3 focus:outline-none max-h-48"
+            disabled={sending}
+            aria-label="Message"
+          />
+        </div>
+
+        <div className="flex shrink-0 items-stretch bg-bg-2">
+          <span
+            className={`hidden sm:flex items-center px-3 font-mono text-[10px] tabular-nums border-r border-line ${
+              overInline ? "text-warn" : "text-ink-4"
+            }`}
+            title={overInline ? "Will route via IPFS" : "Will be stored on-chain"}
+          >
+            {byteLength}/{ON_CHAIN_BYTE_LIMIT}
+          </span>
+          <button
+            type="submit"
+            disabled={!value.trim() || sending}
+            className="btn-accent h-auto px-4 text-[13px]"
+            aria-label="Send message"
+          >
+            {sending ? (
+              <span className="inline-block h-3 w-3 animate-pulse-soft bg-accent-ink/40" />
+            ) : (
+              <SendIcon size={14} strokeWidth={2.4} />
+            )}
+            <span className="hidden sm:inline">Send</span>
+          </button>
+        </div>
+      </form>
+
+      {/* Hint row */}
+      <div className="mt-2 flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-ink-4">
+        <span>
+          enter · send  |  shift+enter · newline
+        </span>
+        {overInline ? (
+          <span className="inline-flex items-center gap-1 text-warn">
+            <ZapIcon size={11} /> ipfs route
+          </span>
+        ) : (
+          <span>on-chain · euint256</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function shortRecipient(r: string) {
+  if (!r) return "this address";
+  if (r.length > 12) return `${r.slice(0, 6)}…${r.slice(-4)}`;
+  return r;
+}
+
+function CommandPreview({
+  parsed,
+}: {
+  parsed: NonNullable<ReturnType<typeof parseSlashCommand>>;
+}) {
+  let summary: React.ReactNode = null;
+  let icon: React.ReactNode = <ZapIcon size={13} />;
+  let label: string = parsed.type;
+
+  if (parsed.type === "send") {
+    icon = <CoinsIcon size={13} />;
+    label = "payment / send";
+    summary = (
+      <>
+        Transfer <strong>{parsed.amount} {parsed.token}</strong>
+        {parsed.to
+          ? <> → <code className="font-mono text-[12px] text-ink-0">{parsed.to}</code></>
+          : <> → current recipient</>}
+      </>
+    );
+  } else if (parsed.type === "request") {
+    icon = <CoinsIcon size={13} />;
+    label = "payment / request";
+    summary = (
+      <>
+        Request <strong>{parsed.amount} {parsed.token}</strong>
+        {parsed.from
+          ? <> from <code className="font-mono text-[12px] text-ink-0">{parsed.from}</code></>
+          : <> from current recipient</>}
+      </>
+    );
+  } else if (parsed.type === "invite") {
+    icon = <InviteIcon size={13} />;
+    label = "invite";
+    summary = parsed.address
+      ? <> Invite <code className="font-mono text-[12px]">{parsed.address}</code></>
+      : <>Send invite link to current recipient</>;
+  }
+
+  return (
+    <div className="mb-2 flex items-center gap-3 border border-accent/40 bg-accent-soft px-3 py-2.5 animate-fade-in">
+      <span className="grid h-7 w-7 shrink-0 place-items-center bg-accent text-accent-ink">
+        {icon}
+      </span>
+      <div className="min-w-0 flex-1 text-[13px] text-ink-1">
+        <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-accent-bright">{label}</div>
+        <div className="truncate">{summary}</div>
+      </div>
+    </div>
+  );
+}
