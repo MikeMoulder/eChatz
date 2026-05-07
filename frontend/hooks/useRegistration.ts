@@ -77,7 +77,7 @@ export function useRegistration() {
     // the registration flow once. They sign: one personal_sign (key derivation)
     // + one tx (registerSessionKey). Both happen automatically here.
     try {
-      const { address: mainAddress } = await connectWallet();
+      const { account: mainAddress } = await connectWallet();
       const sessionWallet = await loadOrDeriveSessionKey(mainAddress);
       const skTx = await registry.registerSessionKey(sessionWallet.address);
       await skTx.wait();
