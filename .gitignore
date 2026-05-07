@@ -26,6 +26,7 @@ gas-report.txt
 frontend/.next/
 frontend/out/
 frontend/.vercel/
+.vercel/
 frontend/next-env.d.ts
 frontend/tsconfig.tsbuildinfo
 
