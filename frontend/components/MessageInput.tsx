@@ -25,13 +25,13 @@ const COMMANDS: CommandDef[] = [
   {
     cmd: "/send",
     template: "/send 0.01 ETH",
-    hint: "Send ETH or token to this recipient  ·  add 'to <addr>' for another address",
+    hint: "ETH only · optional: to <addr> · note <text> (encrypted, 32-byte max)",
     icon: <CoinsIcon size={13} />,
   },
   {
     cmd: "/request",
     template: "/request 0.01 ETH",
-    hint: "Request a confidential payment from this recipient  ·  add 'from <addr>' for another",
+    hint: "Request payment · optional: from <addr> · note <text>",
     icon: <CoinsIcon size={13} />,
   },
   {
@@ -43,6 +43,7 @@ const COMMANDS: CommandDef[] = [
 ];
 
 const ON_CHAIN_BYTE_LIMIT = 32;
+const MAX_MESSAGE_CHARS = 500;
 
 export function MessageInput({ recipient, onSend }: Props) {
   const [value, setValue] = useState("");
@@ -65,9 +66,13 @@ export function MessageInput({ recipient, onSend }: Props) {
 
   const isCommand = isSlashCommand(value);
   const parsed = isCommand ? parseSlashCommand(value) : null;
+  const isSendDraft = value.trimStart().toLowerCase().startsWith("/send");
+  const hasToClause = /\bto\s+\S+/i.test(value);
+  const hasNoteClause = /\bnote\s+/i.test(value);
 
   const byteLength = new TextEncoder().encode(value).length;
   const overInline = byteLength > ON_CHAIN_BYTE_LIMIT;
+  const charLength = value.length;
 
   function applyCommand(cmd: CommandDef) {
     setValue(cmd.template);
@@ -86,9 +91,33 @@ export function MessageInput({ recipient, onSend }: Props) {
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }
 
+  function setInputAndFocus(next: string) {
+    const limited = next.slice(0, MAX_MESSAGE_CHARS);
+    setValue(limited);
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(limited.length, limited.length);
+      autoResize(ta);
+    });
+  }
+
+  function insertSendPart(part: string) {
+    const base = value.trim();
+    const next = base.length === 0
+      ? `/send 0.01 ETH ${part}`.trim()
+      : `${base}${base.endsWith(" ") ? "" : " "}${part}`;
+    setInputAndFocus(next);
+  }
+
   async function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault();
     if (!value.trim() || sending) return;
+    if (value.trim().length > MAX_MESSAGE_CHARS) {
+      setError(`Message must be ${MAX_MESSAGE_CHARS} characters or fewer.`);
+      return;
+    }
     setError(null);
     setSending(true);
     try {
@@ -127,7 +156,7 @@ export function MessageInput({ recipient, onSend }: Props) {
   }
 
   function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    setValue(e.target.value);
+    setValue(e.target.value.slice(0, MAX_MESSAGE_CHARS));
     autoResize(e.target);
   }
 
@@ -177,6 +206,35 @@ export function MessageInput({ recipient, onSend }: Props) {
       {/* Parsed command preview */}
       {parsed && parsed.type !== "unknown" && !showPalette && <CommandPreview parsed={parsed} />}
 
+      {/* Quick builder chips for /send */}
+      {isSendDraft && !showPalette && (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setInputAndFocus("/send 0.01 ETH")}
+            className="border border-line bg-bg-2 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-ink-2 transition-colors hover:border-accent/50 hover:text-accent-bright"
+          >
+            template
+          </button>
+          <button
+            type="button"
+            onClick={() => insertSendPart(`to ${recipient || "0x"}`)}
+            disabled={hasToClause}
+            className="border border-line bg-bg-2 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-ink-2 transition-colors hover:border-accent/50 hover:text-accent-bright disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            add recipient
+          </button>
+          <button
+            type="button"
+            onClick={() => insertSendPart("note ")}
+            disabled={hasNoteClause}
+            className="border border-line bg-bg-2 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-ink-2 transition-colors hover:border-accent/50 hover:text-accent-bright disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            add note
+          </button>
+        </div>
+      )}
+
       {error && (
         <div className="mb-2 border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger animate-fade-in">
           {error}
@@ -193,6 +251,7 @@ export function MessageInput({ recipient, onSend }: Props) {
             value={value}
             onChange={handleChange}
             onKeyDown={handleKeyDown}
+            maxLength={MAX_MESSAGE_CHARS}
             placeholder={`Send an encrypted message  to ${shortRecipient(recipient)} · use / for commands`}
             rows={1}
             className="w-full resize-none bg-transparent px-3.5 py-3 text-[14px] leading-snug text-ink-1 placeholder:text-ink-3 focus:outline-none max-h-48"
@@ -208,7 +267,7 @@ export function MessageInput({ recipient, onSend }: Props) {
             }`}
             title={overInline ? "Will route via IPFS" : "Will be stored on-chain"}
           >
-            {byteLength}/{ON_CHAIN_BYTE_LIMIT}
+            {charLength}/{MAX_MESSAGE_CHARS}
           </span>
           <button
             type="submit"
@@ -227,17 +286,14 @@ export function MessageInput({ recipient, onSend }: Props) {
       </form>
 
       {/* Hint row */}
-      <div className="mt-2 flex items-center justify-between font-mono text-[10px] uppercase tracking-wider text-ink-4">
-        <span>
-          enter · send  |  shift+enter · newline
+      <div className="mt-2 flex items-center justify-end font-mono text-[10px] uppercase tracking-wider text-ink-4">
+        <span className="inline-flex items-center gap-3">
+          {overInline ? (
+            <span className="inline-flex items-center gap-1 text-warn">
+              <ZapIcon size={11} /> ipfs route
+            </span>
+          ) : null}
         </span>
-        {overInline ? (
-          <span className="inline-flex items-center gap-1 text-warn">
-            <ZapIcon size={11} /> ipfs route
-          </span>
-        ) : (
-          <span>on-chain · euint256</span>
-        )}
       </div>
     </div>
   );
@@ -261,24 +317,58 @@ function CommandPreview({
   if (parsed.type === "send") {
     icon = <CoinsIcon size={13} />;
     label = "payment / send";
+    const noteBytes = new TextEncoder().encode(parsed.note).length;
+    const guide = [
+      `1) amount: ${parsed.amount || "missing"}`,
+      `2) token: ${parsed.token || "missing"} (ETH only)`,
+      `3) recipient: ${parsed.to ? "custom" : "current chat"}`,
+      `4) note: ${parsed.note ? `${noteBytes}/32 bytes` : "optional (use: note <text>)"}`,
+    ];
     summary = (
-      <>
-        Transfer <strong>{parsed.amount} {parsed.token}</strong>
-        {parsed.to
-          ? <> → <code className="font-mono text-[12px] text-ink-0">{parsed.to}</code></>
-          : <> → current recipient</>}
-      </>
+      <div className="space-y-1">
+        <div>
+          Transfer <strong>{parsed.amount} {parsed.token}</strong>
+          {parsed.to
+            ? <> → <code className="font-mono text-[12px] text-ink-0">{parsed.to}</code></>
+            : <> → current recipient</>}
+        </div>
+        {parsed.note ? (
+          <div className="truncate">
+            note: <code className="font-mono text-[12px] text-ink-0">{parsed.note}</code>
+          </div>
+        ) : null}
+        <div className="font-mono text-[10px] uppercase tracking-wider text-ink-3">
+          {guide.join("  ·  ")}
+        </div>
+      </div>
     );
   } else if (parsed.type === "request") {
     icon = <CoinsIcon size={13} />;
     label = "payment / request";
+    const noteBytes = new TextEncoder().encode(parsed.note).length;
+    const guide = [
+      `1) amount: ${parsed.amount || "missing"}`,
+      `2) token: ${parsed.token || "missing"}`,
+      `3) payer: ${parsed.from ? "custom" : "current chat"}`,
+      `4) note: ${parsed.note ? `${noteBytes}/32 bytes` : "optional (use: note <text>)"}`,
+    ];
     summary = (
-      <>
-        Request <strong>{parsed.amount} {parsed.token}</strong>
-        {parsed.from
-          ? <> from <code className="font-mono text-[12px] text-ink-0">{parsed.from}</code></>
-          : <> from current recipient</>}
-      </>
+      <div className="space-y-1">
+        <div>
+          Request <strong>{parsed.amount} {parsed.token}</strong>
+          {parsed.from
+            ? <> from <code className="font-mono text-[12px] text-ink-0">{parsed.from}</code></>
+            : <> from current recipient</>}
+        </div>
+        {parsed.note ? (
+          <div className="truncate">
+            note: <code className="font-mono text-[12px] text-ink-0">{parsed.note}</code>
+          </div>
+        ) : null}
+        <div className="font-mono text-[10px] uppercase tracking-wider text-ink-3">
+          {guide.join("  ·  ")}
+        </div>
+      </div>
     );
   } else if (parsed.type === "invite") {
     icon = <InviteIcon size={13} />;

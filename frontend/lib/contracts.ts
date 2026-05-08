@@ -64,9 +64,12 @@ export const MESSAGE_STORE_ABI = [
 
 export const PAYMENT_ROUTER_ABI = [
   "function sendETH(address recipient, bytes32 noteHandle, bytes calldata inputProof) external payable",
+  "function sendETHConfidential(address recipient, bytes32 encAmountHandle, bytes32 noteHandle, bytes calldata inputProof) external payable",
   "function sendERC20(address recipient, address token, uint256 amount, bytes32 noteHandle, bytes calldata inputProof) external",
   "function createRequest(address payer, address token, uint256 amount, bytes32 encAmountHandle, bytes32 noteHandle, bytes calldata inputProof) external",
   "function fulfillRequest(uint256 requestId) external payable",
+  "function fulfillRequestConfidential(uint256 requestId, bytes32 encAmountHandle, bytes32 noteHandle, bytes calldata inputProof) external payable",
+  "function paymentRequests(uint256) view returns (address requester, address payer, address token, uint256 amount, bytes32 encryptedAmount, bytes32 encryptedNote, bool fulfilled, uint256 createdAt)",
   "function createEscrow(address beneficiary, address arbitrator, address token, uint256 amount, bytes32 termsHandle, bytes calldata inputProof) external payable",
   "function approveEscrowRelease(uint256 escrowId) external",
   "function refundEscrow(uint256 escrowId) external",

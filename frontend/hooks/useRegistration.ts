@@ -22,6 +22,11 @@ export function useRegistration() {
       setStatus("unregistered");
       return;
     }
+    // Don't check network until chainId is resolved (0 = not yet determined)
+    if (chainId === 0) {
+      setStatus("loading");
+      return;
+    }
     if (chainId !== EXPECTED_CHAIN_ID) {
       setError(`Wrong network — please switch to Sepolia (chain ${EXPECTED_CHAIN_ID})`);
       setStatus("wrong-network");

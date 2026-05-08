@@ -3,7 +3,7 @@
 import "@rainbow-me/rainbowkit/styles.css";
 import { getDefaultConfig, RainbowKitProvider, darkTheme } from "@rainbow-me/rainbowkit";
 import { WagmiProvider, http, useAccount } from "wagmi";
-import { mainnet, sepolia } from "wagmi/chains";
+import { mainnet, sepolia, defineChain } from "wagmi/chains";
 import { QueryClientProvider, QueryClient } from "@tanstack/react-query";
 import { ReactNode, useEffect } from "react";
 import { getRelayerInstance } from "@/lib/relayer";
@@ -11,12 +11,15 @@ import { getRelayerInstance } from "@/lib/relayer";
 const queryClient = new QueryClient();
 const INFURA_KEY = process.env.NEXT_PUBLIC_INFURA_API_KEY;
 
+// Explicitly define Sepolia for clarity (already in wagmi but being explicit)
+const sepoliaChain = sepolia;
+
 const config = getDefaultConfig({
   appName: "echatz",
   projectId: process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? "echatz-local",
-  chains: [sepolia, mainnet],
+  chains: [sepoliaChain, mainnet],
   transports: {
-    [sepolia.id]: http(
+    [sepoliaChain.id]: http(
       INFURA_KEY ? `https://sepolia.infura.io/v3/${INFURA_KEY}` : "https://rpc.sepolia.org",
     ),
     [mainnet.id]: http(

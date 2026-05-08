@@ -16,6 +16,50 @@ import {
 } from "@zama-fhe/relayer-sdk/web";
 import { BrowserProvider, Contract } from "ethers";
 
+interface EncryptResult {
+  handles: Uint8Array[];
+  inputProof: Uint8Array;
+}
+
+interface EncryptInputLike {
+  encrypt: (opts: { timeout: number }) => Promise<EncryptResult>;
+}
+
+function shouldRetryEncryptError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return (
+    message.includes("json parsing failed") ||
+    message.includes("input-proof") ||
+    message.includes("internal server error") ||
+    message.includes("unexpected token") ||
+    message.includes("429") ||
+    message.includes("too many requests") ||
+    message.includes("failed to fetch")
+  );
+}
+
+async function encryptWithRetry(input: EncryptInputLike, timeout = 120_000): Promise<EncryptResult> {
+  const maxAttempts = 3;
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await input.encrypt({ timeout });
+    } catch (err) {
+      lastError = err;
+      if (attempt >= maxAttempts || !shouldRetryEncryptError(err)) {
+        throw withRelayerContext(err);
+      }
+
+      // Exponential backoff with small jitter for transient relayer failures.
+      const delayMs = 400 * 2 ** (attempt - 1) + Math.floor(Math.random() * 200);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  throw withRelayerContext(lastError);
+}
+
 /** Convert a Uint8Array from the relayer SDK to a 0x-prefixed hex string. */
 function u8ToHex(bytes: Uint8Array): `0x${string}` {
   return ("0x" + Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("")) as `0x${string}`;
@@ -60,8 +104,9 @@ export async function getRelayerInstance(): Promise<FhevmInstance> {
     _instance = await createInstance({
       ...SepoliaConfig,
       // Route relayer requests through Next.js server proxy to avoid browser CORS.
+      // relayer-sdk calls /keyurl, /input-proof, etc, so include /v2 in the base URL.
       // /api/relayer/:path* is rewritten to https://relayer.testnet.zama.org/:path*
-      relayerUrl: window.location.origin + "/api/relayer",
+      relayerUrl: window.location.origin + "/api/relayer/v2",
       network: window.ethereum,
     });
 
@@ -123,9 +168,7 @@ export async function encryptMessageContent(
   const input   = relayer.createEncryptedInput(contractAddress, effectiveAccount);
   input.add256(paddedBigInt);
 
-  const encrypted = await input.encrypt({ timeout: 120_000 }).catch((err) => {
-    throw withRelayerContext(err);
-  });
+  const encrypted = await encryptWithRetry(input, 120_000);
 
   const handle    = u8ToHex(encrypted.handles[0]);
   const inputProof = u8ToHex(encrypted.inputProof);
@@ -153,9 +196,7 @@ export async function encryptIpfsCid(
   const input = relayer.createEncryptedInput(contractAddress, effectiveAccount);
   input.add256(paddedBigInt);
 
-  const encrypted  = await input.encrypt({ timeout: 120_000 }).catch((err) => {
-    throw withRelayerContext(err);
-  });
+  const encrypted  = await encryptWithRetry(input, 120_000);
   const handle     = u8ToHex(encrypted.handles[0]);
   const inputProof = u8ToHex(encrypted.inputProof);
 
@@ -177,9 +218,7 @@ export async function encryptUint64(
   const input = relayer.createEncryptedInput(contractAddress, effectiveAccount);
   input.add64(amount);
 
-  const encrypted  = await input.encrypt({ timeout: 120_000 }).catch((err) => {
-    throw withRelayerContext(err);
-  });
+  const encrypted  = await encryptWithRetry(input, 120_000);
   const handle     = u8ToHex(encrypted.handles[0]);
   const inputProof = u8ToHex(encrypted.inputProof);
 
@@ -201,9 +240,7 @@ export async function encryptUint32(
   const input = relayer.createEncryptedInput(contractAddress, effectiveAccount);
   input.add32(choice);
 
-  const encrypted  = await input.encrypt({ timeout: 120_000 }).catch((err) => {
-    throw withRelayerContext(err);
-  });
+  const encrypted  = await encryptWithRetry(input, 120_000);
   const handle     = u8ToHex(encrypted.handles[0]);
   const inputProof = u8ToHex(encrypted.inputProof);
 
@@ -238,9 +275,7 @@ export async function encryptPaymentRequest(
   input.add64(amountWei);   // handles[0] = encAmountHandle (euint64)
   input.add256(noteBigInt); // handles[1] = noteHandle (euint256)
 
-  const encrypted = await input.encrypt({ timeout: 120_000 }).catch((err) => {
-    throw withRelayerContext(err);
-  });
+  const encrypted = await encryptWithRetry(input, 120_000);
 
   return {
     amountHandle: u8ToHex(encrypted.handles[0]),
@@ -297,6 +332,15 @@ const _decryptCache = new Map<string, Uint8Array>();
 function withRelayerContext(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error);
   const lower = message.toLowerCase();
+
+  if (
+    lower.includes("json parsing failed") &&
+    (lower.includes("input-proof") || lower.includes("internal server error") || lower.includes("unexpected token"))
+  ) {
+    return new Error(
+      "Zama relayer returned a temporary non-JSON /input-proof response (typically a transient 5xx). Please retry. The client now auto-retries a few times before surfacing this error.",
+    );
+  }
 
   if (
     lower.includes("failed to fetch") &&
@@ -501,9 +545,7 @@ export async function encryptRegistrationFields(
   const input = relayer.createEncryptedInput(contractAddress, account);
   input.add256(strTo32BigInt(username));
   input.add256(strTo32BigInt(bio));
-  const encrypted = await input.encrypt({ timeout: 120_000 }).catch((err) => {
-    throw withRelayerContext(err);
-  });
+  const encrypted = await encryptWithRetry(input, 120_000);
 
   return {
     usernameHandle: u8ToHex(encrypted.handles[0]),
@@ -558,6 +600,8 @@ export function classifyError(error: unknown): Error {
     return new Error("you are not a participant in this thread");
   if (message.includes("0x989a539a"))
     return new Error("encryption proof invalid — please retry");
+  if (message.includes("0xeefbf17e"))
+    return new Error("message feed compatibility mismatch (nextMessageId unavailable on this deployment)");
 
   return new Error(`unexpected error: ${message}`);
 }
