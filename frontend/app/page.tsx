@@ -1,20 +1,18 @@
 import Link from "next/link";
 import { ConnectButton } from "../components/ConnectButton";
 import { Logo, LogoMark } from "../components/Logo";
+import { LiveTransmission } from "../components/LiveTransmission";
 import {
   ArrowRightIcon,
-  CheckIcon,
   GithubIcon,
-  LockIcon,
   TerminalIcon,
-  ZapIcon,
 } from "../components/Icons";
 
 export default function HomePage() {
   return (
     <main className="relative min-h-screen overflow-x-hidden animate-page-enter">
       <div
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_8%,rgba(212,160,23,0.10),transparent_32%),radial-gradient(circle_at_85%_22%,rgba(212,160,23,0.08),transparent_30%)]"
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_15%_8%,rgba(212,160,23,0.04),transparent_34%),radial-gradient(circle_at_85%_22%,rgba(212,160,23,0.03),transparent_32%)]"
         aria-hidden
       />
       <SiteHeader />
@@ -50,7 +48,7 @@ function SiteHeader() {
         </nav>
         <div className="flex items-center gap-2">
           <a
-            href="https://github.com/"
+            href="https://github.com/MikeMoulder/echatz"
             target="_blank"
             rel="noreferrer"
             aria-label="GitHub"
@@ -68,11 +66,15 @@ function SiteHeader() {
 function Hero() {
   return (
     <section className="relative border-b border-line">
+      <div
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_-20%,rgba(0,0,0,0.55),transparent_56%),linear-gradient(to_bottom,rgba(0,0,0,0.34),rgba(0,0,0,0.18))]"
+        aria-hidden
+      />
       <div className="pointer-events-none absolute inset-0 grid-bg opacity-50" aria-hidden />
       <div className="pointer-events-none absolute inset-0 scanlines" aria-hidden />
 
-      <div className="relative mx-auto grid max-w-[1400px] grid-cols-1 lg:grid-cols-12">
-        <div className="border-r-0 lg:border-r border-line lg:col-span-7 px-6 py-16 md:px-12 md:py-24">
+      <div className="relative mx-auto grid max-w-[1400px] grid-cols-1 lg:grid-cols-12 lg:gap-12 items-center">
+        <div className="lg:col-span-7 px-6 py-16 md:px-12 md:py-24">
           <div
             className="section-eyebrow mb-8 reveal"
             style={{ animationDelay: "60ms" }}
@@ -80,23 +82,12 @@ function Hero() {
             <span>FILE / 01 - welcome</span>
           </div>
 
-          <h1 className="font-display text-[44px] md:text-[64px] lg:text-[72px] leading-[1.02] font-semibold tracking-tightest text-ink-0">
-            <span className="reveal block" style={{ animationDelay: "120ms" }}>
-              Message like
-            </span>
-            <span
-              className="reveal block font-serif italic font-normal text-accent hero-italic"
-              style={{ animationDelay: "220ms" }}
-            >
-              no one is watching.
-            </span>
-            <span className="reveal block" style={{ animationDelay: "320ms" }}>
-              Keep your chat,
-            </span>
-            <span className="reveal block" style={{ animationDelay: "400ms" }}>
-              your way.
-            </span>
-          </h1>
+          <div className="flex items-center gap-3 select-none">
+            <LogoMark size={44} />
+            <h1 className="font-display text-[15vw] md:text-[8vw] leading-none font-semibold tracking-tightest text-ink-0">
+              echatz<span className="text-accent">.</span>
+            </h1>
+          </div>
 
           <p
             className="reveal mt-8 max-w-xl text-[16px] leading-relaxed text-ink-2"
@@ -121,189 +112,11 @@ function Hero() {
           </div>
         </div>
 
-        <div className="lg:col-span-5 p-6 md:p-10 reveal" style={{ animationDelay: "320ms" }}>
-          <CipherPreview />
+        <div className="lg:col-span-5 px-6 pb-16 lg:py-24 lg:pl-0 lg:pr-12">
+          <LiveTransmission />
         </div>
       </div>
     </section>
-  );
-}
-
-function CipherPreview() {
-  return (
-    <div className="cipher-card relative flex min-h-[560px] flex-col surface-2 overflow-hidden">
-      <span className="corner-tl" />
-      <span className="corner-tr" />
-      <span className="corner-bl" />
-      <span className="corner-br" />
-
-      {/* Static ambient glow */}
-      <div
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_85%_-12%,rgba(212,160,23,0.20),transparent_44%),radial-gradient(circle_at_-8%_112%,rgba(212,160,23,0.08),transparent_48%)]"
-        aria-hidden
-      />
-
-      {/* Status strip */}
-      <div className="relative flex items-center justify-between border-b border-line/70 bg-bg-2/40 px-4 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-3">
-        <span>cipher · thread</span>
-        <span className="flex items-center gap-1.5 text-accent-bright">
-          <LockIcon size={10} strokeWidth={2.4} />
-          end-to-end
-        </span>
-      </div>
-
-      {/* Identity row */}
-      <div className="relative flex items-center gap-3 border-b border-line px-4 py-3">
-        <span className="grid h-10 w-10 shrink-0 place-items-center border border-accent/40 bg-accent/[0.08] font-display text-[15px] font-semibold text-accent-bright">
-          A
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="font-display text-[15px] font-medium text-ink-1">alex.eth</span>
-            <span className="inline-flex items-center gap-1 border border-accent/30 bg-accent/[0.06] px-1.5 py-[2px] font-mono text-[9px] uppercase tracking-[0.14em] text-accent-bright">
-              <CheckIcon size={9} strokeWidth={2.8} /> verified
-            </span>
-          </div>
-          <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-ink-3">
-            <span>0x42a9…f7a3</span>
-            <span className="text-ink-5">·</span>
-            <span className="inline-flex items-center gap-1 text-ok">
-              <span className="h-1 w-1 rounded-full bg-ok" /> online
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Messages */}
-      <div className="relative flex-1 overflow-hidden px-4 py-5">
-        <div className="space-y-3.5">
-          <Bubble side="in" name="alex.eth" time="14:02" delay={560}>
-            dinner was perfect — split it three ways?
-          </Bubble>
-          <Bubble side="out" name="you" time="14:03" delay={780}>
-            on it.
-          </Bubble>
-          <PaymentCard delay={960} />
-          <Bubble side="in" name="alex.eth" time="14:05" delay={1180}>
-            received <span className="text-accent">✦</span> thanks
-          </Bubble>
-        </div>
-      </div>
-
-      {/* Composer */}
-      <div
-        className="reveal relative border-t border-line bg-bg-2/60"
-        style={{ animationDelay: "1320ms" }}
-      >
-        <div className="flex items-center gap-3 px-4 py-3">
-          <span className="font-mono text-[11px] tracking-wider text-accent">/pay</span>
-          <span className="flex-1 truncate font-mono text-[12px] text-ink-2">
-            alex.eth <span className="text-ink-3">·</span> 14 dai
-            <span
-              className="cipher-caret ml-1 inline-block h-[12px] w-[1.5px] translate-y-[2px] bg-accent align-middle"
-              aria-hidden
-            />
-          </span>
-          <button
-            type="button"
-            tabIndex={-1}
-            aria-hidden
-            className="inline-flex items-center gap-1.5 border border-accent/50 bg-accent/[0.10] px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-accent-bright hover:bg-accent/[0.18] transition-colors"
-          >
-            send <ArrowRightIcon size={10} strokeWidth={2.6} />
-          </button>
-        </div>
-        <div className="flex items-center gap-2 border-t border-line/70 px-4 py-2 font-mono text-[10px] text-ink-3">
-          <span className="uppercase tracking-[0.16em]">try</span>
-          {["/split", "/escrow", "/vote", "/schedule"].map((cmd) => (
-            <span
-              key={cmd}
-              className="border border-line bg-bg-3 px-1.5 py-[2px] text-ink-2 hover:border-accent/40 hover:text-accent-bright transition-colors cursor-default"
-            >
-              {cmd}
-            </span>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Bubble({
-  side,
-  name,
-  time,
-  children,
-  delay,
-}: {
-  side: "in" | "out";
-  name: string;
-  time: string;
-  children: React.ReactNode;
-  delay: number;
-}) {
-  const isOut = side === "out";
-  return (
-    <div
-      className={`reveal flex flex-col ${isOut ? "items-end" : "items-start"}`}
-      style={{ animationDelay: `${delay}ms` }}
-    >
-      <div className={`flex items-baseline gap-2 px-1 ${isOut ? "flex-row-reverse" : ""}`}>
-        <span
-          className={`font-display text-[12px] font-medium ${
-            isOut ? "text-accent-bright" : "text-ink-1"
-          }`}
-        >
-          {name}
-        </span>
-        <span className="font-mono text-[10px] text-ink-3">{time}</span>
-      </div>
-      <div
-        className={`mt-1 max-w-[86%] border px-3 py-2 text-[13px] leading-relaxed ${
-          isOut
-            ? "border-accent/30 bg-accent/[0.08] text-ink-1"
-            : "border-line bg-bg-2/70 text-ink-1"
-        }`}
-      >
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function PaymentCard({ delay }: { delay: number }) {
-  return (
-    <div className="reveal" style={{ animationDelay: `${delay}ms` }}>
-      <div className="flex items-baseline gap-2 px-1">
-        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-accent">
-          payment
-        </span>
-        <span className="font-mono text-[10px] text-ink-3">14:04</span>
-      </div>
-      <div className="mt-1 border border-accent/40 bg-accent/[0.06]">
-        <div className="flex items-center gap-3 px-3 py-3">
-          <span className="grid h-10 w-10 shrink-0 place-items-center border border-accent/40 bg-accent/[0.12] text-accent">
-            <ZapIcon size={14} strokeWidth={2} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-baseline gap-1.5">
-              <span className="font-display text-[20px] leading-none text-ink-0">14.00</span>
-              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-3">
-                dai
-              </span>
-            </div>
-            <div className="mt-1.5 flex items-center gap-1.5 font-mono text-[10px] text-ink-3">
-              <span>→ alex.eth</span>
-              <span className="text-ink-5">·</span>
-              <span className="text-ink-2">0xb1c0…2e87</span>
-            </div>
-          </div>
-          <span className="inline-flex items-center gap-1 self-start border border-accent/40 px-1.5 py-[2px] font-mono text-[9px] uppercase tracking-[0.14em] text-accent-bright whitespace-nowrap">
-            <CheckIcon size={9} strokeWidth={2.8} /> confirmed
-          </span>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -532,7 +345,7 @@ function SiteFooter() {
     },
     {
       title: "Build",
-      links: [["GitHub", "#"]],
+      links: [["GitHub", "https://github.com/MikeMoulder/echatz"]],
     },
     {
       title: "Network",

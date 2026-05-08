@@ -261,6 +261,12 @@
 
   /* ---- hero italic word: gentle accent sheen ---- */
   .hero-italic {
+    color: var(--accent-bright);
+    animation: heroSheen 6s ease-in-out infinite;
+  }
+
+  @supports ((-webkit-background-clip: text) or (background-clip: text)) {
+    .hero-italic {
     background: linear-gradient(
       90deg,
       var(--accent) 0%,
@@ -271,7 +277,7 @@
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
-    animation: heroSheen 6s ease-in-out infinite;
+    }
   }
 
   /* ---- cipher card: light hover halo ---- */
