@@ -3,7 +3,7 @@
 import "@rainbow-me/rainbowkit/styles.css";
 import { getDefaultConfig, RainbowKitProvider, darkTheme } from "@rainbow-me/rainbowkit";
 import { WagmiProvider, http, useAccount } from "wagmi";
-import { mainnet, sepolia, defineChain } from "wagmi/chains";
+import { mainnet, sepolia } from "wagmi/chains";
 import { QueryClientProvider, QueryClient } from "@tanstack/react-query";
 import { ReactNode, useEffect } from "react";
 import { getRelayerInstance } from "@/lib/relayer";

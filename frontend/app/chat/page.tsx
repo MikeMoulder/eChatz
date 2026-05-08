@@ -72,7 +72,7 @@ function ConnectGate() {
             />
             <Bullet
               icon={<ShieldIcon size={13} />}
-              text="You'll register once on IdentityRegistry.sol before sending the first message."
+              text="You'll register once before sending the first message and it all happens encrypted!"
             />
             <Bullet
               icon={<ZapIcon size={13} />}
