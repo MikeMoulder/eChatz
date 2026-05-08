@@ -3,8 +3,6 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { parseSlashCommand, isSlashCommand } from "@/lib/slash-commands";
 import {
-  CoinsIcon,
-  InviteIcon,
   SendIcon,
   ZapIcon,
 } from "./Icons";
@@ -26,19 +24,13 @@ const COMMANDS: CommandDef[] = [
     cmd: "/send",
     template: "/send 0.01 ETH",
     hint: "ETH only · optional: to <addr> · note <text> (encrypted, 32-byte max)",
-    icon: <CoinsIcon size={13} />,
+    icon: <SendIcon size={13} />,
   },
   {
     cmd: "/request",
     template: "/request 0.01 ETH",
-    hint: "Request payment · optional: from <addr> · note <text>",
-    icon: <CoinsIcon size={13} />,
-  },
-  {
-    cmd: "/invite",
-    template: "/invite ",
-    hint: "Send an eChatz invite link to an address",
-    icon: <InviteIcon size={13} />,
+    hint: "Request payment from current chat · optional: note <text>",
+    icon: <SendIcon size={13} className="scale-x-[-1]" />,
   },
 ];
 
@@ -67,6 +59,7 @@ export function MessageInput({ recipient, onSend }: Props) {
   const isCommand = isSlashCommand(value);
   const parsed = isCommand ? parseSlashCommand(value) : null;
   const isSendDraft = value.trimStart().toLowerCase().startsWith("/send");
+  const isRequestDraft = value.trimStart().toLowerCase().startsWith("/request");
   const hasToClause = /\bto\s+\S+/i.test(value);
   const hasNoteClause = /\bnote\s+/i.test(value);
 
@@ -107,6 +100,14 @@ export function MessageInput({ recipient, onSend }: Props) {
     const base = value.trim();
     const next = base.length === 0
       ? `/send 0.01 ETH ${part}`.trim()
+      : `${base}${base.endsWith(" ") ? "" : " "}${part}`;
+    setInputAndFocus(next);
+  }
+
+  function insertRequestPart(part: string) {
+    const base = value.trim();
+    const next = base.length === 0
+      ? `/request 0.01 ETH ${part}`.trim()
       : `${base}${base.endsWith(" ") ? "" : " "}${part}`;
     setInputAndFocus(next);
   }
@@ -235,6 +236,27 @@ export function MessageInput({ recipient, onSend }: Props) {
         </div>
       )}
 
+      {/* Quick builder chips for /request */}
+      {isRequestDraft && !showPalette && (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setInputAndFocus("/request 0.01 ETH")}
+            className="border border-line bg-bg-2 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-ink-2 transition-colors hover:border-accent/50 hover:text-accent-bright"
+          >
+            template
+          </button>
+          <button
+            type="button"
+            onClick={() => insertRequestPart("note ")}
+            disabled={hasNoteClause}
+            className="border border-line bg-bg-2 px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-ink-2 transition-colors hover:border-accent/50 hover:text-accent-bright disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            add note
+          </button>
+        </div>
+      )}
+
       {error && (
         <div className="mb-2 border border-danger/30 bg-danger/10 px-3 py-2 text-[12px] text-danger animate-fade-in">
           {error}
@@ -245,7 +267,15 @@ export function MessageInput({ recipient, onSend }: Props) {
         onSubmit={handleSubmit}
         className="flex items-end gap-px bg-line"
       >
-        <div className="flex-1 bg-bg-2">
+        <div className="relative flex-1 bg-bg-2">
+          {/* Syntax-highlight backdrop — mirrors textarea layout exactly */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 overflow-hidden px-3.5 py-3 text-[14px] leading-snug whitespace-pre-wrap break-words text-transparent"
+            style={{ wordBreak: "break-word" }}
+          >
+            {highlightCommand(value)}
+          </div>
           <textarea
             ref={textareaRef}
             value={value}
@@ -254,7 +284,8 @@ export function MessageInput({ recipient, onSend }: Props) {
             maxLength={MAX_MESSAGE_CHARS}
             placeholder={`Send an encrypted message  to ${shortRecipient(recipient)} · use / for commands`}
             rows={1}
-            className="w-full resize-none bg-transparent px-3.5 py-3 text-[14px] leading-snug text-ink-1 placeholder:text-ink-3 focus:outline-none max-h-48"
+            className="relative w-full resize-none bg-transparent px-3.5 py-3 text-[14px] leading-snug text-ink-1 caret-ink-1 placeholder:text-ink-3 focus:outline-none max-h-48"
+            style={{ color: "transparent", caretColor: "rgba(255, 255, 255, 0.94)" }}
             disabled={sending}
             aria-label="Message"
           />
@@ -299,6 +330,57 @@ export function MessageInput({ recipient, onSend }: Props) {
   );
 }
 
+/**
+ * Renders the textarea value with command keywords bolded in the backdrop.
+ * Produces React nodes that are exactly as wide as the plain text so the
+ * caret position on the transparent textarea stays aligned.
+ */
+function highlightCommand(raw: string): React.ReactNode {
+  // Only highlight slash commands; plain messages pass through unchanged.
+  if (!raw.startsWith("/")) return <span className="text-ink-1">{raw}</span>;
+
+  // Token patterns for /send and /request
+  // Each segment: keyword | address | amount+token | note text | plain
+  const parts: React.ReactNode[] = [];
+  let rest = raw;
+
+  // Keywords we want to highlight
+  const keywordRe = /^(\/send|\/request|to|from|note)(\s)/i;
+
+  let i = 0;
+  while (rest.length > 0) {
+    const kwMatch = rest.match(keywordRe);
+    if (kwMatch) {
+      parts.push(
+        <strong key={i++} className="font-semibold text-ink-0">
+          {kwMatch[1]}
+        </strong>,
+        <span key={i++} className="text-ink-1">{kwMatch[2]}</span>,
+      );
+      rest = rest.slice(kwMatch[0].length);
+      continue;
+    }
+
+    // Ethereum address — monospace + dimmed
+    const addrMatch = rest.match(/^(0x[a-fA-F0-9]{1,40})/);
+    if (addrMatch) {
+      parts.push(
+        <code key={i++} className="font-mono text-accent-bright">
+          {addrMatch[1]}
+        </code>,
+      );
+      rest = rest.slice(addrMatch[1].length);
+      continue;
+    }
+
+    // Consume one character as plain text
+    parts.push(<span key={i++} className="text-ink-1">{rest[0]}</span>);
+    rest = rest.slice(1);
+  }
+
+  return <>{parts}</>;
+}
+
 function shortRecipient(r: string) {
   if (!r) return "this address";
   if (r.length > 12) return `${r.slice(0, 6)}…${r.slice(-4)}`;
@@ -315,7 +397,7 @@ function CommandPreview({
   let label: string = parsed.type;
 
   if (parsed.type === "send") {
-    icon = <CoinsIcon size={13} />;
+    icon = <SendIcon size={13} />;
     label = "payment / send";
     const noteBytes = new TextEncoder().encode(parsed.note).length;
     const guide = [
@@ -326,24 +408,22 @@ function CommandPreview({
     ];
     summary = (
       <div className="space-y-1">
-        <div>
-          Transfer <strong>{parsed.amount} {parsed.token}</strong>
-          {parsed.to
-            ? <> → <code className="font-mono text-[12px] text-ink-0">{parsed.to}</code></>
-            : <> → current recipient</>}
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[13px] leading-snug">
+          <span><strong>send:</strong> {parsed.amount} {parsed.token}</span>
+          {parsed.to && (
+            <span><strong>to:</strong> <code className="font-mono text-[12px] text-ink-0">{parsed.to}</code></span>
+          )}
+          {parsed.note && (
+            <span><strong>note:</strong> <code className="font-mono text-[12px] text-ink-0">{parsed.note}</code></span>
+          )}
         </div>
-        {parsed.note ? (
-          <div className="truncate">
-            note: <code className="font-mono text-[12px] text-ink-0">{parsed.note}</code>
-          </div>
-        ) : null}
         <div className="font-mono text-[10px] uppercase tracking-wider text-ink-3">
           {guide.join("  ·  ")}
         </div>
       </div>
     );
   } else if (parsed.type === "request") {
-    icon = <CoinsIcon size={13} />;
+    icon = <SendIcon size={13} className="scale-x-[-1]" />;
     label = "payment / request";
     const noteBytes = new TextEncoder().encode(parsed.note).length;
     const guide = [
@@ -354,28 +434,21 @@ function CommandPreview({
     ];
     summary = (
       <div className="space-y-1">
-        <div>
-          Request <strong>{parsed.amount} {parsed.token}</strong>
-          {parsed.from
-            ? <> from <code className="font-mono text-[12px] text-ink-0">{parsed.from}</code></>
-            : <> from current recipient</>}
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[13px] leading-snug">
+          <span><strong>request:</strong> {parsed.amount} {parsed.token}</span>
+          <span><strong>from:</strong> {parsed.from
+            ? <code className="font-mono text-[12px] text-ink-0">{parsed.from}</code>
+            : <span className="text-ink-3">current chat</span>}
+          </span>
+          {parsed.note && (
+            <span><strong>note:</strong> <code className="font-mono text-[12px] text-ink-0">{parsed.note}</code></span>
+          )}
         </div>
-        {parsed.note ? (
-          <div className="truncate">
-            note: <code className="font-mono text-[12px] text-ink-0">{parsed.note}</code>
-          </div>
-        ) : null}
         <div className="font-mono text-[10px] uppercase tracking-wider text-ink-3">
           {guide.join("  ·  ")}
         </div>
       </div>
     );
-  } else if (parsed.type === "invite") {
-    icon = <InviteIcon size={13} />;
-    label = "invite";
-    summary = parsed.address
-      ? <> Invite <code className="font-mono text-[12px]">{parsed.address}</code></>
-      : <>Send invite link to current recipient</>;
   }
 
   return (

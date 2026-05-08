@@ -449,130 +449,134 @@ export function useMessages(recipient: string) {
 
   const sendMessage = useCallback(
     async (text: string) => {
-      if (!address || !walletClient) throw new Error("wallet not connected");
-      if (text.trim().length > MAX_MESSAGE_CHARS) {
-        throw new Error(`Message must be ${MAX_MESSAGE_CHARS} characters or fewer.`);
-      }
-
-      const parsed = parseSlashCommand(text);
-      setSendState("encrypting");
-
-      if (!parsed || parsed.type === "unknown") {
-        // Optimistic: append the message locally so the sender sees it instantly.
-        const optimisticId = -Date.now();
-        const optimisticMsg: MessageData = {
-          id: optimisticId,
-          sender: address,
-          recipient,
-          timestamp: Math.floor(Date.now() / 1000),
-          messageType: 0,
-          storageType: 0,
-          contentHandle: "",
-          threadId: 0,
-          decryptedBytes: new TextEncoder().encode(text),
-          pendingState: "encrypting",
-        };
-        setMessages((prev) => [...prev, optimisticMsg]);
-
-        const onSubmitted = () => {
-          setSendState("confirming");
-          // Flip the phase badge in the optimistic bubble to "confirming"
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === optimisticId ? { ...m, pendingState: "confirming" as const } : m,
-            ),
-          );
-        };
-
-        let tx: Awaited<ReturnType<typeof _sendPlainMessage>>;
-        try {
-          tx = await _sendPlainMessage(text, recipient, address, walletClient, onSubmitted);
-        } catch (err) {
-          // Encrypt or tx submit failed — remove the optimistic bubble.
-          setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
-          setSendState("idle");
-          throw err;
+      try {
+        if (!address || !walletClient) throw new Error("wallet not connected");
+        if (text.trim().length > MAX_MESSAGE_CHARS) {
+          throw new Error(`Message must be ${MAX_MESSAGE_CHARS} characters or fewer.`);
         }
 
-        setSendState("done");
-        setTimeout(() => setSendState("idle"), 1500);
+        const parsed = parseSlashCommand(text);
+        setSendState("encrypting");
 
-        // Reload ONLY after the tx is confirmed — the optimistic bubble stays visible
-        // until then, so the sender never sees a gap where their message disappears.
-        tx.wait()
-          .then(() => loadMessages({ preserveOptimistic: false }).catch(() => {}))
-          .catch(() => {
-            // Tx reverted on-chain — remove the optimistic bubble.
-            setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
-          });
-      } else {
-        const localPaymentId = -Date.now();
-        const paymentTo = parsed.type === "send"
-          ? (parsed.to || recipient)
-          : parsed.type === "request"
-            ? (parsed.from || recipient)
-            : recipient;
-        const paymentNote = parsed.type === "send" || parsed.type === "request" ? parsed.note : "";
-        const localPaymentPayload =
-          parsed.type === "send"
-            ? serializePaymentReceipt({
-                amount: parsed.amount,
-                token: parsed.token,
-                to: paymentTo,
-                note: paymentNote,
-              })
-            : parsed.type === "request"
-              ? serializePaymentRequest({
-                  requestId: "pending",
-                  amount: parsed.amount,
-                  token: parsed.token,
-                  requester: address,
-                  payer: paymentTo,
-                  note: paymentNote,
-                })
-            : "";
-
-        if (parsed.type === "send" || parsed.type === "request") {
+        if (!parsed || parsed.type === "unknown") {
+          // Optimistic: append the message locally so the sender sees it instantly.
+          const optimisticId = -Date.now();
           const optimisticMsg: MessageData = {
-            id: localPaymentId,
+            id: optimisticId,
             sender: address,
-            recipient: paymentTo,
+            recipient,
             timestamp: Math.floor(Date.now() / 1000),
             messageType: 0,
             storageType: 0,
             contentHandle: "",
             threadId: 0,
-            decryptedBytes: new TextEncoder().encode(localPaymentPayload),
+            decryptedBytes: new TextEncoder().encode(text),
             pendingState: "encrypting",
-            localOnly: true,
           };
           setMessages((prev) => [...prev, optimisticMsg]);
-        }
 
-        try {
-          setSendState("confirming");
-          await _handleSlashCommand(parsed, recipient, address, walletClient);
-
-          if (parsed.type === "send" || parsed.type === "request") {
+          const onSubmitted = () => {
+            setSendState("confirming");
+            // Flip the phase badge in the optimistic bubble to "confirming"
             setMessages((prev) =>
               prev.map((m) =>
-                m.id === localPaymentId
-                  ? { ...m, pendingState: undefined, timestamp: Math.floor(Date.now() / 1000) }
-                  : m,
+                m.id === optimisticId ? { ...m, pendingState: "confirming" as const } : m,
               ),
             );
+          };
+
+          let tx: Awaited<ReturnType<typeof _sendPlainMessage>>;
+          try {
+            tx = await _sendPlainMessage(text, recipient, address, walletClient, onSubmitted);
+          } catch (err) {
+            // Encrypt or tx submit failed — remove the optimistic bubble.
+            setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
+            setSendState("idle");
+            throw err;
           }
 
           setSendState("done");
           setTimeout(() => setSendState("idle"), 1500);
-          loadMessages({ preserveOptimistic: false }).catch(() => {});
-        } catch (err) {
+
+          // Reload ONLY after the tx is confirmed — the optimistic bubble stays visible
+          // until then, so the sender never sees a gap where their message disappears.
+          tx.wait()
+            .then(() => loadMessages({ preserveOptimistic: false }).catch(() => {}))
+            .catch(() => {
+              // Tx reverted on-chain — remove the optimistic bubble.
+              setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
+            });
+        } else {
+          const localPaymentId = -Date.now();
+          const paymentTo = parsed.type === "send"
+            ? (parsed.to || recipient)
+            : parsed.type === "request"
+              ? (parsed.from || recipient)
+              : recipient;
+          const paymentNote = parsed.type === "send" || parsed.type === "request" ? parsed.note : "";
+          const localPaymentPayload =
+            parsed.type === "send"
+              ? serializePaymentReceipt({
+                  amount: parsed.amount,
+                  token: parsed.token,
+                  to: paymentTo,
+                  note: paymentNote,
+                })
+              : parsed.type === "request"
+                ? serializePaymentRequest({
+                    requestId: "pending",
+                    amount: parsed.amount,
+                    token: parsed.token,
+                    requester: address,
+                    payer: paymentTo,
+                    note: paymentNote,
+                  })
+                : "";
+
           if (parsed.type === "send" || parsed.type === "request") {
-            setMessages((prev) => prev.filter((m) => m.id !== localPaymentId));
+            const optimisticMsg: MessageData = {
+              id: localPaymentId,
+              sender: address,
+              recipient: paymentTo,
+              timestamp: Math.floor(Date.now() / 1000),
+              messageType: 0,
+              storageType: 0,
+              contentHandle: "",
+              threadId: 0,
+              decryptedBytes: new TextEncoder().encode(localPaymentPayload),
+              pendingState: "encrypting",
+              localOnly: true,
+            };
+            setMessages((prev) => [...prev, optimisticMsg]);
           }
-          setSendState("idle");
-          throw err;
+
+          try {
+            setSendState("confirming");
+            await _handleSlashCommand(parsed, recipient, address, walletClient);
+
+            if (parsed.type === "send" || parsed.type === "request") {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === localPaymentId
+                    ? { ...m, pendingState: undefined, timestamp: Math.floor(Date.now() / 1000) }
+                    : m,
+                ),
+              );
+            }
+
+            setSendState("done");
+            setTimeout(() => setSendState("idle"), 1500);
+            loadMessages({ preserveOptimistic: false }).catch(() => {});
+          } catch (err) {
+            if (parsed.type === "send" || parsed.type === "request") {
+              setMessages((prev) => prev.filter((m) => m.id !== localPaymentId));
+            }
+            setSendState("idle");
+            throw err;
+          }
         }
+      } catch (err) {
+        throw classifyError(err);
       }
     },
     [address, walletClient, recipient, loadMessages],
@@ -870,19 +874,6 @@ async function _handleSlashCommand(
     const msgStore = new Contract(CONTRACT_ADDRESSES.messageStore, MESSAGE_STORE_ABI, signer);
     const requestMsgTx = await msgStore.sendMessage(from, requestEnc.handle, requestEnc.inputProof, 0, 1);
     await requestMsgTx.wait();
-    return;
-  }
-
-  if (parsed.type === "invite") {
-    const invitee = parsed.address || recipient;
-    if (!invitee || !/^0x[a-fA-F0-9]{40}$/.test(invitee)) {
-      throw new Error("Please provide a valid Ethereum address: /invite 0x...");
-    }
-    const invReg = new Contract(CONTRACT_ADDRESSES.inviteRegistry, INVITE_REGISTRY_ABI, signer);
-    const baseUrl = process.env.NEXT_PUBLIC_APP_BASE_URL ?? window.location.origin;
-    const link = `${baseUrl}/join?ref=${sender}`;
-    const tx = await invReg.createInvite(invitee, link);
-    await tx.wait();
     return;
   }
 

@@ -643,7 +643,7 @@ function FreshThreadHero({ recipient }: { recipient: string }) {
           <p className="text-[12px] text-ink-2 leading-relaxed">
             Type <code className="font-mono text-ink-0 bg-bg-3 px-1 py-px">/</code> in the composer
             to use slash commands like <code className="font-mono text-accent-bright">/send</code>{" "}
-            and <code className="font-mono text-accent-bright">/vote</code>.
+            and <code className="font-mono text-accent-bright">/request</code>.
           </p>
         </div>
       </div>

@@ -589,19 +589,22 @@ export function classifyError(error: unknown): Error {
   if (lower.includes("user rejected"))
     return new Error("user rejected transaction");
 
-  // Decode known on-chain custom error selectors
-  if (message.includes("0xa5070af6"))
+  // Decode known on-chain custom error selectors (case-insensitive)
+  if (lower.includes("0xa5070af6"))
     return new Error("recipient is not registered on eChatz");
-  if (message.includes("0x1a0743b2"))
+  if (lower.includes("0x1a0743b2"))
     return new Error("your account is not registered on eChatz");
-  if (message.includes("0x73bb9021"))
+  if (lower.includes("0x73bb9021"))
     return new Error("recipient has blocked you");
-  if (message.includes("0xe438f8ce"))
+  if (lower.includes("0xe438f8ce"))
     return new Error("you are not a participant in this thread");
-  if (message.includes("0x989a539a"))
+  if (lower.includes("0x989a539a"))
     return new Error("encryption proof invalid — please retry");
-  if (message.includes("0xeefbf17e"))
+  if (lower.includes("0xeefbf17e"))
     return new Error("message feed compatibility mismatch (nextMessageId unavailable on this deployment)");
 
-  return new Error(`unexpected error: ${message}`);
+  // Preserve explicit app-level errors unchanged so UI copy stays natural.
+  if (error instanceof Error) return error;
+
+  return new Error(message);
 }

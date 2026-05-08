@@ -6,7 +6,7 @@ import { parseEther } from "viem";
 import { Logo } from "./Logo";
 import { Identicon, AddressBadge } from "./AddressBadge";
 import { ConnectButton } from "./ConnectButton";
-import { PlusIcon, SearchIcon, LockIcon, SettingsIcon } from "./Icons";
+import { PlusIcon, SearchIcon, LockIcon, SettingsIcon, ExternalIcon } from "./Icons";
 import { isAddressLike, isEnsLike, shortAddress } from "@/lib/format";
 import { useSessionKey } from "@/hooks/useSessionKey";
 
@@ -267,9 +267,21 @@ export function Sidebar({ threads, activeAddress, onSelect, onClose, onNewChat }
             <div className="space-y-2">
               {/* Address + balance */}
               <div className="flex items-center justify-between">
-                <span className="font-mono text-[11px] text-ink-2 truncate max-w-[160px]">
-                  {shortAddress(sessionKey.address)}
-                </span>
+                <div className="flex items-center gap-1 min-w-0">
+                  <span className="font-mono text-[11px] text-ink-2 truncate max-w-[140px]">
+                    {shortAddress(sessionKey.address)}
+                  </span>
+                  <a
+                    href={`https://sepolia.etherscan.io/address/${sessionKey.address}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="Open gas wallet on Sepolia Etherscan"
+                    title="View on Sepolia Etherscan"
+                    className="grid h-5 w-5 place-items-center text-ink-3 hover:text-accent-bright"
+                  >
+                    <ExternalIcon size={11} />
+                  </a>
+                </div>
                 <span
                   className={`font-mono text-[11px] tabular-nums ${
                     sessionKey.isLowBalance ? "text-warn" : "text-accent-bright"

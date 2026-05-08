@@ -8,14 +8,11 @@
  *   /request <amount> <token> [from <address>]
  *       — create a confidential payment request from the chat recipient (or explicit address)
  *
- *   /invite [<address>]
- *       — send an eChatz invite link
  */
 
 export type ParsedCommand =
   | { type: "send";    amount: string; token: string; to: string; note: string }
   | { type: "request"; amount: string; token: string; from: string; note: string }
-  | { type: "invite";  address: string }
   | { type: "unknown"; raw: string };
 
 export function parseSlashCommand(input: string): ParsedCommand | null {
@@ -89,15 +86,6 @@ export function parseSlashCommand(input: string): ParsedCommand | null {
     return { type: "request", amount, token, from, note };
   }
 
-  // /invite [<address>]
-  const inviteFull = trimmed.match(/^\/invite\s+(\S+)$/i);
-  if (inviteFull) {
-    return { type: "invite", address: inviteFull[1] };
-  }
-  if (trimmed.toLowerCase() === "/invite") {
-    return { type: "invite", address: "" };
-  }
-
   return { type: "unknown", raw: trimmed };
 }
 
@@ -118,7 +106,6 @@ export function getCommandHelp(): string {
     "/split 0.3 ETH with 0xAddr1,0xAddr2,0xAddr3",
     "/schedule 0.001 ETH to 0xABC... every 1d",
     "/vote Which option is better? options Option A,Option B,Option C",
-    "/invite 0xABC...",
     "/burn",
   ].join("\n");
 }

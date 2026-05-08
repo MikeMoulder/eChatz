@@ -6,7 +6,7 @@ import { decryptMessageContent } from "@/lib/relayer";
 import { fetchFromIpfs, bytes32ToCid } from "@/lib/ipfs";
 import { CONTRACT_ADDRESSES, PAYMENT_ROUTER_ABI } from "@/lib/contracts";
 import { formatTimeOfDay, shortAddress } from "@/lib/format";
-import { CheckIcon, FlameIcon, LockIcon, MoreIcon, CopyIcon, CoinsIcon, ArrowRightIcon } from "./Icons";
+import { CheckIcon, FlameIcon, LockIcon, MoreIcon, CopyIcon, SendIcon, ArrowRightIcon } from "./Icons";
 
 export interface MessageData {
   id: number;
@@ -246,7 +246,7 @@ function MessageBubbleImpl({
                         encrypted payment
                       </div>
                       <div className="mt-0.5 flex items-center gap-1.5 text-[15px] font-semibold leading-none">
-                        <CoinsIcon size={13} /> {payment.amount} {payment.token}
+                        <SendIcon size={13} /> {payment.amount} {payment.token}
                       </div>
                       <div className={`mt-1 inline-flex items-center gap-1 font-mono text-[10px] ${
                         isSelf ? "text-accent-ink/70" : "text-ink-3"
@@ -277,7 +277,7 @@ function MessageBubbleImpl({
                       payment request
                     </div>
                     <div className="mt-0.5 flex items-center gap-1.5 text-[15px] font-semibold leading-none">
-                      <CoinsIcon size={13} /> {paymentRequest.amount} {paymentRequest.token}
+                      <SendIcon size={13} className="scale-x-[-1]" /> {paymentRequest.amount} {paymentRequest.token}
                     </div>
                     <div className={`inline-flex items-center gap-1 font-mono text-[10px] ${
                       isSelf ? "text-accent-ink/70" : "text-ink-3"
