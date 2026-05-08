@@ -56,7 +56,7 @@ export function RegisterPrompt({ register, error }: Props) {
               Create your <span className="font-serif italic text-accent">encrypted</span> identity.
             </h1>
             <p className="mt-5 max-w-md text-[14px] leading-relaxed text-ink-2">
-              Your username, bio and public key live inside <span className="font-mono text-ink-0">IdentityRegistry.sol</span> on
+              Your username, bio and public key live inside <span className="font-mono text-ink-0">an Onchain Registry</span> on
               Zama fhEVM. The contract verifies your key derives from your address before storing
               anything. There is no off-chain directory and no recovery account.
             </p>
@@ -67,7 +67,7 @@ export function RegisterPrompt({ register, error }: Props) {
               n="01"
               icon={<ZapIcon size={13} />}
               title="One signature for your public key"
-              body="A personal_sign challenge lets us recover your 65-byte uncompressed ECDSA key (FIX_9). No extra wallet permissions."
+              body="A wallet sign challenge lets the program recover your 65-byte uncompressed ECDSA key. No extra wallet permissions."
             />
             <Bullet
               n="02"
@@ -79,7 +79,7 @@ export function RegisterPrompt({ register, error }: Props) {
               n="03"
               icon={<ShieldIcon size={13} />}
               title="One on-chain transaction"
-              body="registerUser(usernameHandle, bioHandle, inputProof, publicKey) — verified, stored, immutable."
+              body="All transactions stored onchain are verifiable, immutable."
             />
           </ol>
 
