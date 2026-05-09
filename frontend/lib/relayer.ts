@@ -1,11 +1,11 @@
 /**
  * Zama relayer-sdk integration for eChatz frontend.
  *
- * Based on skill.md §8.3 — exact relayer-sdk usage pattern.
- * Uses @zama-fhe/relayer-sdk ^0.4.1 (NOT the legacy fhevmjs).
+ * Wraps @zama-fhe/relayer-sdk for encryption, decryption, and EIP-712 signing.
  *
- * SECURITY: Never log plaintext decrypted values to console or remote logs.
- *           Do not persist ciphertext handles in localStorage.
+ * Security constraints:
+ *  - Never log plaintext decrypted values to the console or remote logging services.
+ *  - Do not persist ciphertext handles in localStorage.
  */
 
 import {

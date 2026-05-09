@@ -8,12 +8,8 @@ import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step
  * @title InviteRegistry
  * @notice Manages eChatz invite links. Invites gate new user registration.
  *
- * No FHE state in this contract — invite links are plaintext off-chain.
- * Only metadata (inviter, invitee, expiry) is stored on-chain.
- *
- * CORRECTIONS FROM SPEC:
- *  - pragma ^0.8.27
- *  - No TFHE usage (this contract has none)
+ * No FHE state in this contract — invite links are plaintext and live off-chain.
+ * Only metadata (inviter, invitee, expiry) is recorded on-chain.
  */
 contract InviteRegistry is ZamaEthereumConfig, Ownable2Step {
     // ──────────────────────────────────────────────────────────────────

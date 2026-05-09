@@ -1,16 +1,16 @@
 /**
  * IPFS hybrid storage for eChatz.
  *
- * FIX_3 — Dual-pin strategy: Pinata (primary) + web3.storage (secondary).
- * Both must fail for the upload to abort.
- * Re-pin on every successful fetch to refresh TTL.
+ * Dual-pin strategy: Pinata (primary) + web3.storage (fallback).
+ * Both services must fail before an upload is considered failed.
+ * Successful fetches trigger a re-pin to refresh TTL.
  *
  * Routing rule:
- *   plaintext length <= 32 bytes -> on-chain (euint256, storageType = 0)
- *   plaintext length  > 32 bytes -> IPFS (storageType = 1, content = encrypted CID bytes32)
+ *   plaintext length <= 32 bytes  →  on-chain storage  (euint256, storageType = 0)
+ *   plaintext length  > 32 bytes  →  IPFS storage       (storageType = 1, content = encrypted CID)
  *
- * SECURITY: Never store ciphertext or plaintext in localStorage.
- *           API key is server-side only (IPFS_API_KEY env var).
+ * Security: ciphertext and plaintext are never persisted to localStorage.
+ *           The Pinata API key is server-side only (IPFS_API_KEY env var).
  */
 
 /**
@@ -61,8 +61,8 @@ export async function uploadToIpfs(data: Uint8Array): Promise<string> {
 }
 
 /**
- * Fetch raw bytes from IPFS with retry logic.
- * FIX_3: 10s timeout + 3 retries → graceful error.
+ * Fetch raw bytes from IPFS with timeout and retry logic.
+ * Aborts after 10 s per attempt; retries up to 3 times before propagating the error.
  */
 export async function fetchFromIpfs(cid: string): Promise<Uint8Array> {
   let lastError: Error = new Error("IPFS fetch failed");

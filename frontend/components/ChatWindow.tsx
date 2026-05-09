@@ -7,7 +7,7 @@ import { MessageBubble, type MessageData } from "./MessageBubble";
 import { Sidebar, type ThreadEntry } from "./Sidebar";
 import { AddressBadge } from "./AddressBadge";
 import { MessageSkeleton } from "./Skeleton";
-import { ArrowLeftIcon, CheckIcon, LockIcon, MoreIcon, ShieldIcon, TerminalIcon, ZapIcon } from "./Icons";
+import { ArrowLeftIcon, CheckIcon, CoinsIcon, LockIcon, MoreIcon, SendIcon, ShieldIcon, TerminalIcon, ZapIcon } from "./Icons";
 import { useMessages, type SendState } from "@/hooks/useMessages";
 import { useInbox } from "@/hooks/useInbox";
 import { formatDateLabel, isAddressLike, isEnsLike, shortAddress } from "@/lib/format";
@@ -15,6 +15,7 @@ import { DECRYPT_SESSION_CONTRACTS } from "@/lib/contracts";
 import { authorizeDecryptSession, hasDecryptSession } from "@/lib/relayer";
 
 const RECENTS_KEY = "echatz:recent-threads";
+const ONBOARDED_KEY = "echatz:onboarded";
 
 // ── Last-read timestamp helpers (per wallet + per peer) ──────────────────────
 function lrKey(my: string, peer: string) {
@@ -34,6 +35,7 @@ export function ChatWindow() {
   const [recipient, setRecipient] = useState<string>("");
   const [recents, setRecents] = useState<string[]>([]);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [unlockingDecrypt, setUnlockingDecrypt] = useState(false);
   const [decryptUnlocked, setDecryptUnlocked] = useState(false);
   const [decryptUnlockError, setDecryptUnlockError] = useState<string | null>(null);
@@ -62,6 +64,12 @@ export function ChatWindow() {
     try {
       const raw = localStorage.getItem(RECENTS_KEY);
       if (raw) setRecents(JSON.parse(raw));
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem(ONBOARDED_KEY)) setShowOnboarding(true);
     } catch {}
   }, []);
 
@@ -159,8 +167,14 @@ export function ChatWindow() {
     setRecipient(trimmed);
   }
 
+  function dismissOnboarding() {
+    try { localStorage.setItem(ONBOARDED_KEY, "1"); } catch {}
+    setShowOnboarding(false);
+  }
+
   return (
     <div className="grid h-[100dvh] grid-cols-1 md:grid-cols-[300px_1fr]">
+      {showOnboarding && <OnboardingOverlay onDismiss={dismissOnboarding} />}
       <div className="hidden md:block">
         <Sidebar threads={threads} activeAddress={recipient} onSelect={setRecipient} onNewChat={handleNewChat} />
       </div>
@@ -741,6 +755,142 @@ function messagesPlaceholder() {
     if (raw) return String(JSON.parse(raw).length || 0);
   } catch {}
   return "0";
+}
+
+function OnboardingOverlay({ onDismiss }: { onDismiss: () => void }) {
+  const [step, setStep] = useState(0);
+
+  const steps = [
+    {
+      icon: <LockIcon size={24} strokeWidth={2} />,
+      title: "End-to-end encrypted.",
+      body: "Every message is encrypted on-chain with Zama fhEVM. Only you and your recipient hold the decryption keys, no server ever sees plaintext.",
+    },
+    {
+      icon: <ShieldIcon size={24} strokeWidth={2} />,
+      title: "One signature, unlimited reads.",
+      body: 'Hit "Unlock decrypt session" once per session. eChatz caches the authorization so you can decrypt your full history without signing every message.',
+    },
+    {
+      icon: <TerminalIcon size={24} strokeWidth={2} />,
+      title: "Slash commands.",
+      body: (
+        <>
+          Type <code className="rounded bg-bg-3 px-1 py-px font-mono text-ink-0">/</code> in the chatbox to access built-in commands:{" "}
+          <code className="font-mono text-accent-bright">/send</code> to transfer tokens,{" "}
+          <code className="font-mono text-accent-bright">/request</code> to ask for payment, and more.
+        </>
+      ),
+    },
+    {
+      icon: <CoinsIcon size={24} strokeWidth={2} />,
+      title: "Gas wallet — no popup spam.",
+      body: (
+        <>
+          Set up a <span className="font-mono text-ink-0">gas wallet</span> from the sidebar. eChatz derives a lightweight burner key from a single signature and uses it to pay gas on every send, so wallet popups never interrupts you mid-conversation. Top it up with a small amount of ETH when the balance runs low.
+        </>
+      ),
+    },
+    {
+      icon: <SendIcon size={24} strokeWidth={2} />,
+      title: "Start a thread.",
+      body: "Paste any 0x address or ENS name into the new-chat field in the sidebar to open a private thread. No sign-up, no accounts, just your wallet.",
+    },
+  ] as const;
+
+  const current = steps[step];
+  const isLast = step === steps.length - 1;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onDismiss();
+      if (e.key === "ArrowRight" && !isLast) setStep((s) => s + 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isLast, onDismiss]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/75 backdrop-blur-sm"
+        onClick={onDismiss}
+        aria-hidden="true"
+      />
+
+      {/* Card */}
+      <div className="relative w-full max-w-md border border-line bg-bg-1 shadow-2xl animate-fade-in-up">
+        {/* Corner accents */}
+        <span className="corner-tl" />
+        <span className="corner-tr" />
+        <span className="corner-bl" />
+        <span className="corner-br" />
+
+        {/* Header bar */}
+        <div className="flex items-center justify-between border-b border-line px-4 py-3">
+          <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-3">
+            echatz — getting started
+          </span>
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="font-mono text-[10px] uppercase tracking-wider text-ink-3 hover:text-ink-1 transition-colors"
+            aria-label="Skip onboarding"
+          >
+            skip
+          </button>
+        </div>
+
+        {/* Step content */}
+        <div className="px-6 py-8">
+          <div className="mb-5 grid h-12 w-12 place-items-center border border-accent/40 bg-accent-soft text-accent">
+            {current.icon}
+          </div>
+          <h2 className="font-display text-xl font-semibold tracking-tight text-ink-0">
+            {current.title}
+          </h2>
+          <p className="mt-3 text-[13px] leading-relaxed text-ink-2">{current.body}</p>
+        </div>
+
+        {/* Step dots + nav */}
+        <div className="flex items-center justify-between border-t border-line px-4 py-3">
+          <div className="flex items-center gap-1.5">
+            {steps.map((_, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => setStep(i)}
+                aria-label={`Go to step ${i + 1}`}
+                className={`h-1.5 transition-all duration-200 ${
+                  i === step ? "w-5 bg-accent" : "w-1.5 bg-line hover:bg-ink-3"
+                }`}
+              />
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {step > 0 && (
+              <button
+                type="button"
+                onClick={() => setStep((s) => s - 1)}
+                className="h-8 border border-line px-3 font-mono text-[10px] uppercase tracking-wider text-ink-2 hover:text-ink-1 transition-colors"
+              >
+                back
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={isLast ? onDismiss : () => setStep((s) => s + 1)}
+              className="h-8 border border-accent/60 bg-accent-soft px-4 font-mono text-[10px] uppercase tracking-wider text-accent-bright hover:border-accent transition-colors"
+            >
+              {isLast ? "let's go" : "next"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function groupByDay(messages: MessageData[]): { day: number; items: MessageData[] }[] {

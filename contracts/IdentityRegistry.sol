@@ -10,13 +10,11 @@ import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step
  * @notice Manages eChatz user registration, public keys, profiles, contact lists,
  *         blocklists, and device links.
  *
- * CORRECTIONS FROM SPEC:
- *  - encrypted profile fields are represented as euint256 handles
- *  - FHE.* API (not TFHE.*)
- *  - ACL grants added after every encrypted state write
- *  - publicKeys stored as plaintext bytes — used for identity verification only;
- *    NOT for FHE encryption (fhEVM uses global KMS key, not per-user keys)
- *  - pragma ^0.8.27, SepoliaConfig inheritance
+ * Design notes:
+ *  - Encrypted profile fields (username, bio) are stored as euint256 handles
+ *    under the global fhEVM KMS key. ACL grants are applied after every write.
+ *  - publicKeys hold the raw 65-byte uncompressed ECDSA key and are used for
+ *    identity verification only — they play no role in FHE encryption.
  */
 contract IdentityRegistry is ZamaEthereumConfig, Ownable2Step {
     // ──────────────────────────────────────────────────────────────────

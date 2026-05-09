@@ -8,18 +8,16 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 /**
  * @title MessageStore
- * @notice On-chain encrypted P2P messaging.
+ * @notice On-chain encrypted peer-to-peer messaging.
  *
- * CORRECTIONS FROM SPEC:
- *  - Single ciphertext per message (NOT dual ciphertext) — fhEVM uses a global KMS key.
- *    Both sender and recipient are ACL-granted on the same handle.
- *  - euint256 stores up to 32 inline bytes or a 32-byte encrypted IPFS CID pointer.
- *  - FHE.* namespace (not TFHE.*)
- *  - No synchronous decrypt in contract body
- *  - FHE.allowThis + FHE.allow after every encrypted write
- *  - pragma ^0.8.27, SepoliaConfig inheritance
- *  - CONSTRAINT_7 / FIX_1: REQUIRE(isRegistered) for sender AND recipient at sendMessage()
- *  - CONSTRAINT_6: isBlocked check before storing message
+ * Architecture notes:
+ *  - Single ciphertext per message: fhEVM uses a global KMS key. Both sender
+ *    and recipient are ACL-granted on the same handle so either party can decrypt.
+ *  - euint256 accommodates up to 32 bytes of inline content or a 32-byte
+ *    encrypted IPFS CID pointer for larger payloads.
+ *  - FHE.allowThis + FHE.allow must be called after every encrypted state write.
+ *  - Registration is enforced for both sender and recipient at send time.
+ *  - Blocklist check precedes message storage.
  */
 contract MessageStore is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard {
     // ──────────────────────────────────────────────────────────────────
@@ -147,7 +145,7 @@ contract MessageStore is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard {
         // Resolve session key → owner so msg.sender can be a gas wallet
         address realSender = identityRegistry.resolveUser(msg.sender);
 
-        // FIX_1 / FIX_2: Registration gate (both layers)
+        // Registration gate — both sender and recipient must be registered
         if (!identityRegistry.isRegistered(realSender))
             revert SenderNotRegistered();
         if (!identityRegistry.isRegistered(recipient))
@@ -352,9 +350,9 @@ contract MessageStore is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard {
     // ──────────────────────────────────────────────────────────────────
     //  Burn after read
     //
-    //  CONSTRAINT_5: Blockchain state is immutable.
-    //  We overwrite the ciphertext slot with an encrypted zero-value.
-    //  The on-chain handle is replaced — old ciphertext is inaccessible via ACL.
+    //  Blockchain state is immutable, so burning overwrites the ciphertext slot
+    //  with an encrypted zero. The handle is replaced — the original ciphertext
+    //  becomes inaccessible via ACL.
     // ──────────────────────────────────────────────────────────────────
 
     function burnMessage(uint256 messageId) external {

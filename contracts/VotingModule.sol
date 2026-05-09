@@ -8,19 +8,16 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 /**
  * @title VotingModule
- * @notice Encrypted on-chain polls (/vote command).
+ * @notice Encrypted on-chain polls tied to chat threads (/vote command).
  *
- * CORRECTIONS FROM SPEC:
- *  - hasVoted is PLAINTEXT mapping(address => bool) — no synchronous decrypt needed
- *  - FHE.select() used instead of TFHE.cmux()
- *  - FHE.eq() for vote option comparison
- *  - FHE.add() for encrypted tally accumulation
- *  - FHE.* API (not TFHE.*)
- *  - euint32 for vote tallies (4-byte per option, max 2^32 votes per option)
- *  - externalEuint32 for incoming vote choice
- *  - MAX 5 options, MAX 20 voters (per §8 feasibility)
- *  - pragma ^0.8.27, SepoliaConfig inheritance
- *  - Public async decryption of final aggregate ONLY (not per-ballot)
+ * Design notes:
+ *  - hasVoted is a plaintext mapping — ballot privacy is preserved through
+ *    encrypted tallies, not through hiding participation.
+ *  - FHE.select() accumulates votes without revealing individual choices.
+ *  - euint32 per option supports up to 2^32 votes before overflow.
+ *  - Poll results (aggregate tallies only) are decrypted publicly on close;
+ *    individual ballots are never exposed.
+ *  - Maximum 5 options and 20 voters per poll.
  */
 contract VotingModule is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard {
     // ──────────────────────────────────────────────────────────────────
@@ -218,7 +215,7 @@ contract VotingModule is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard {
     /**
      * @notice Close the poll and grant tally handles to both thread participants.
      *         Only creator can close.
-     *         Per §11.2 architecture: public-decrypt only the final aggregate, never per-ballot.
+     *         Tally handles are granted to each grantee; only aggregate results are decryptable.
      */
     function closePoll(uint256 pollId, address[] calldata grantees) external {
         Poll storage p = polls[pollId];

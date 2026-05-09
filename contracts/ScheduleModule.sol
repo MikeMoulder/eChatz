@@ -11,18 +11,11 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 /**
  * @title ScheduleModule
  * @notice Automated recurring payments (/schedule command).
- *         Uses Gelato Network or Chainlink Automation as off-chain executor.
+ *         Relies on Gelato Network or Chainlink Automation as the off-chain executor.
  *
- * On-chain state: scheduled payment config + last execution timestamp.
- * Off-chain automation: Gelato/Chainlink calls executeScheduled() on each interval.
- *
- * CORRECTIONS FROM SPEC:
- *  - euint64 for encrypted amount (not arbitrary euint)
- *  - euint256 for encrypted note
- *  - FHE.* API (not TFHE.*)
- *  - FHE.allowThis + FHE.allow after every encrypted write
- *  - pragma ^0.8.27, SepoliaConfig inheritance
- *  - No synchronous decrypt in contract body
+ * On-chain state holds the scheduled payment config and last execution timestamp.
+ * The automation network calls executeScheduled() at each configured interval.
+ * euint64 is used for encrypted amounts; euint256 for encrypted notes.
  */
 contract ScheduleModule is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;

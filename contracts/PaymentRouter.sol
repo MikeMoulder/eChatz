@@ -10,19 +10,15 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 /**
  * @title PaymentRouter
- * @notice Handles /send, /request, /escrow, and /split slash commands.
+ * @notice Handles in-chat payment actions: /send, /request, /escrow, and /split.
  *
- * CORRECTIONS FROM SPEC:
- *  - euint64 for encrypted amount (not arbitrary euint)
- *  - euint256 for encrypted notes/terms
- *  - Escrow approval flags are PLAINTEXT bool (FIX per §11 — no synchronous decrypt needed)
- *  - FHE.* API (not TFHE.*)
- *  - FHE.allowThis + FHE.allow after every encrypted write
- *  - FIX_2: REQUIRE(isRegistered) for sender and recipient on all payment fns
- *  - FIX_5: REQUIRE(isRegistered(arbitrator)) in createEscrow()
- *  - Emit system message via MessageStore after each payment action
- *  - Protocol fee taken from transfers (not from escrow deposits)
- *  - pragma ^0.8.27, SepoliaConfig inheritance
+ * Design notes:
+ *  - euint64 is used for encrypted amounts; euint256 for encrypted notes and terms.
+ *  - Escrow approval flags are plaintext booleans — no synchronous decrypt needed.
+ *  - Both sender and recipient must be registered for all payment functions.
+ *  - Arbitrator registration is enforced in createEscrow().
+ *  - A system message is emitted to MessageStore after each payment action.
+ *  - Protocol fee is deducted from token transfers, not from escrow deposits.
  */
 contract PaymentRouter is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -500,7 +496,7 @@ contract PaymentRouter is ZamaEthereumConfig, Ownable2Step, ReentrancyGuard {
         if (!identityRegistry.isRegistered(beneficiary))
             revert RecipientNotRegistered();
         if (!identityRegistry.isRegistered(arbitrator))
-            revert ArbitratorNotRegistered(); // FIX_5
+            revert ArbitratorNotRegistered();
 
         euint256 terms = FHE.fromExternal(termsHandle, inputProof);
         FHE.allowThis(terms);
