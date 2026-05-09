@@ -381,4 +381,4 @@ NEXT_PUBLIC_IPFS_GATEWAY=https://ipfs.io/ipfs
 
 ## License
 
-`BSD-3-Clause-Clear` — matching the Zama fhEVM library license.
+`BSD-3-Clause-Clear`
